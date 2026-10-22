@@ -1,8 +1,7 @@
 # ToneGlass
+#> Sound, shaped by you.
 
 An open-source, customizable desktop client for YouTube Music.
-
-> Sound, shaped by you. Born on Arch, at home everywhere.
 
 ToneGlass is not affiliated with YouTube or Google.
 
