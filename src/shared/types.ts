@@ -68,10 +68,28 @@ export interface CollectionTrackPage {
   hasMore: boolean
 }
 
+export type SearchTopActionKind = 'shuffle' | 'mix'
+
+export interface SearchTopAction {
+  id: string
+  kind: SearchTopActionKind
+}
+
+export interface SearchTopResult {
+  item: MediaItem
+  tracks: MediaItem[]
+  actions: SearchTopAction[]
+}
+
+export interface SearchTopActionQueue {
+  items: MediaItem[]
+  title?: string
+}
+
 export interface SearchResult {
   query: string
   filter: SearchFilter
-  topResult?: MediaItem
+  topResult?: SearchTopResult
   items: MediaItem[]
   hasMore: boolean
 }
@@ -94,6 +112,7 @@ export interface AppApi {
     home: (filter?: string) => Promise<HomeData>
     search: (query: string, filter?: SearchFilter) => Promise<SearchResult>
     searchMore: (query: string, filter: SearchFilter) => Promise<SearchMoreResult>
+    topResultAction: (actionId: string) => Promise<SearchTopActionQueue>
     collection: (kind: CollectionKind, id: string) => Promise<CollectionData>
     collectionMore: (kind: CollectionKind, id: string) => Promise<CollectionTrackPage>
     albumYears: (ids: string[]) => Promise<Record<string, number>>

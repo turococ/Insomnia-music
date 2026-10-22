@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { Innertube, Misc } from 'youtubei.js'
 import type {
   AlbumRef,
@@ -13,7 +14,11 @@ import type {
   HomeSection,
   SearchFilter,
   SearchMoreResult,
-  SearchResult
+  SearchResult,
+  SearchTopAction,
+  SearchTopActionKind,
+  SearchTopActionQueue,
+  SearchTopResult
 } from '@shared/types'
 import { APP_USER_AGENT } from './constants'
 import { poTokenProvider } from './po-token'
@@ -25,6 +30,7 @@ type YtMusic = Innertube['music']
 type YtSearch = Awaited<ReturnType<YtMusic['search']>>
 type YtSearchContinuation = Awaited<ReturnType<YtSearch['getContinuation']>>
 type SearchContext = YtSearch | YtSearchContinuation
+type YtEndpoint = Parameters<YtMusic['getInfo']>[0]
 
 interface CachedSource {
   source: PlaybackSource
@@ -36,12 +42,34 @@ interface SearchCardFields {
   title?: unknown
   subtitle?: unknown
   thumbnail?: { contents?: unknown[] } | null
+  contents?: unknown[]
+  buttons?: Array<{
+    text?: unknown
+    icon_type?: string
+    endpoint?: unknown
+  }>
   on_tap?: {
     payload?: {
       browseId?: string
       videoId?: string
     }
   }
+}
+
+interface PlaylistPanelVideoFields {
+  type?: string
+  video_id?: string
+  title?: unknown
+  thumbnail?: unknown[]
+  duration?: { seconds?: number }
+  author?: string
+  album?: { id?: string; name: string; year?: string }
+  artists?: Array<{ name: string; channel_id?: string }>
+  endpoint?: { payload?: { videoId?: string } }
+}
+
+interface TopActionEndpoint {
+  endpoint: YtEndpoint
 }
 
 interface PageHeaderFields {
@@ -98,6 +126,7 @@ class MusicService {
   private pendingCollectionMore = new Map<string, Promise<CollectionTrackPage>>()
   private searchContexts = new Map<string, SearchContext>()
   private pendingSearchMore = new Map<string, Promise<SearchMoreResult>>()
+  private topActionEndpoints = new Map<string, TopActionEndpoint>()
   private albumYearCache = new Map<string, number>()
 
   async init(): Promise<Innertube> {
@@ -216,6 +245,20 @@ class MusicService {
     }
   }
 
+  async topResultAction(actionId: string): Promise<SearchTopActionQueue> {
+    const action = this.topActionEndpoints.get(actionId)
+    if (!action) throw new Error('This top result action expired. Search again.')
+
+    const music = await this.music()
+    const info = await music.getInfo(action.endpoint)
+    const panel = await info.getUpNext()
+    const items = this.mapPlaylistPanel(panel.contents)
+
+    if (items.length === 0) throw new Error('Could not start this mix.')
+
+    return { items, title: this.text(panel.title) }
+  }
+
   async searchMore(query: string, filter: SearchFilter): Promise<SearchMoreResult> {
     const trimmed = query.trim()
     if (!trimmed || filter === 'all') return { items: [], hasMore: false }
@@ -270,8 +313,8 @@ class MusicService {
     }
   }
 
-  private mapSearch(search: YtSearch): { topResult?: MediaItem; items: MediaItem[] } {
-    let topResult: MediaItem | undefined
+  private mapSearch(search: YtSearch): { topResult?: SearchTopResult; items: MediaItem[] } {
+    let topResult: SearchTopResult | undefined
     const rawItems: unknown[] = []
 
     for (const section of search.contents ?? []) {
@@ -291,24 +334,39 @@ class MusicService {
 
     if (!topResult) return { items }
 
-    const match = items.find((item) => item.kind === topResult?.kind && item.id === topResult?.id)
+    const { item } = topResult
+    const match = items.find(
+      (candidate) => candidate.kind === item.kind && candidate.id === item.id
+    )
     if (match) {
       topResult = {
         ...topResult,
-        artists: topResult.artists.length > 0 ? topResult.artists : match.artists,
-        album: topResult.album ?? match.album,
-        year: topResult.year ?? match.year,
-        plays: topResult.plays ?? match.plays,
-        duration: topResult.duration ?? match.duration,
-        thumbnails: topResult.thumbnails.length > 0 ? topResult.thumbnails : match.thumbnails
+        item: {
+          ...item,
+          artists: item.artists.length > 0 ? item.artists : match.artists,
+          album: item.album ?? match.album,
+          year: item.year ?? match.year,
+          plays: item.plays ?? match.plays,
+          duration: item.duration ?? match.duration,
+          thumbnails: item.thumbnails.length > 0 ? item.thumbnails : match.thumbnails
+        }
       }
     }
 
-    const topKey = `${topResult.kind}:${topResult.id}`
+    const topKey = `${item.kind}:${item.id}`
     return {
       topResult,
-      items: items.filter((item) => `${item.kind}:${item.id}` !== topKey)
+      items: items.filter((candidate) => `${candidate.kind}:${candidate.id}` !== topKey)
     }
+  }
+
+  private rememberTopAction(actionId: string, endpoint: YtEndpoint): void {
+    this.topActionEndpoints.delete(actionId)
+    this.topActionEndpoints.set(actionId, { endpoint })
+    if (this.topActionEndpoints.size <= 64) return
+
+    const oldestKey = this.topActionEndpoints.keys().next().value
+    if (oldestKey) this.topActionEndpoints.delete(oldestKey)
   }
 
   private mapSearchItems(rawItems: unknown[] | undefined): MediaItem[] {
@@ -332,7 +390,7 @@ class MusicService {
     return items
   }
 
-  private mapSearchCard(raw: unknown): MediaItem | undefined {
+  private mapSearchCard(raw: unknown): SearchTopResult | undefined {
     const card = raw as SearchCardFields
     const title = this.text(card.title)
     const subtitle = this.text(card.subtitle)
@@ -363,8 +421,7 @@ class MusicService {
     const plays = parts
       .map((part) => this.parseCompactNumber(part))
       .find((value): value is number => value !== undefined)
-
-    return {
+    const item: MediaItem = {
       id,
       kind,
       title,
@@ -374,6 +431,95 @@ class MusicService {
       plays,
       duration: this.parseDurationText(subtitle),
       thumbnails: this.mapThumbnails(card.thumbnail?.contents)
+    }
+
+    const topTracks =
+      kind === 'artist'
+        ? this.mapSearchItems(card.contents)
+            .filter((track) => track.kind === 'song' || track.kind === 'video')
+            .slice(0, 3)
+            .map((track) =>
+              track.artists.length > 0 ? track : { ...track, artists: [{ id, name: title }] }
+            )
+        : []
+
+    return {
+      item,
+      tracks: topTracks,
+      actions: this.mapSearchActions(card.buttons)
+    }
+  }
+
+  private mapSearchActions(buttons: SearchCardFields['buttons']): SearchTopAction[] {
+    const actions: SearchTopAction[] = []
+    const seen = new Set<SearchTopActionKind>()
+
+    for (const button of buttons ?? []) {
+      const kind = this.searchActionKind(button)
+      if (!kind || seen.has(kind) || !button.endpoint) continue
+
+      const actionId = randomUUID()
+      this.rememberTopAction(actionId, button.endpoint as YtEndpoint)
+      seen.add(kind)
+      actions.push({ id: actionId, kind })
+    }
+
+    return actions
+  }
+
+  private searchActionKind(button: {
+    text?: unknown
+    icon_type?: string
+  }): SearchTopActionKind | undefined {
+    const icon = button.icon_type?.toUpperCase()
+    const text = this.text(button.text)?.toLowerCase()
+
+    if (icon === 'MUSIC_SHUFFLE' || text === 'shuffle') return 'shuffle'
+    if (icon === 'MIX' || text === 'mix') return 'mix'
+    return undefined
+  }
+
+  private mapPlaylistPanel(contents: unknown[] | undefined): MediaItem[] {
+    const items: MediaItem[] = []
+
+    for (const raw of contents ?? []) {
+      const value = raw as { type?: string; primary?: unknown }
+      if (value.type === 'PlaylistPanelVideoWrapper') {
+        const item = this.mapPlaylistPanelVideo(value.primary)
+        if (item) items.push(item)
+        continue
+      }
+
+      const item = this.mapPlaylistPanelVideo(raw)
+      if (item) items.push(item)
+    }
+
+    return items
+  }
+
+  private mapPlaylistPanelVideo(raw: unknown): MediaItem | null {
+    const value = raw as PlaylistPanelVideoFields
+    if (value.type !== 'PlaylistPanelVideo') return null
+
+    const id = value.video_id ?? value.endpoint?.payload?.videoId
+    const title = this.text(value.title)
+    if (!id || !title) return null
+
+    const artists =
+      value.artists?.map((artist) => ({ id: artist.channel_id, name: artist.name })) ??
+      (value.author ? [{ name: value.author }] : [])
+    const album = value.album ? { id: value.album.id, name: value.album.name } : undefined
+
+    return {
+      id,
+      kind: 'song',
+      title,
+      subtitle: artists.map((artist) => artist.name).join(' • ') || value.author,
+      artists,
+      album,
+      year: value.album?.year,
+      duration: value.duration?.seconds,
+      thumbnails: this.mapThumbnails(value.thumbnail)
     }
   }
 

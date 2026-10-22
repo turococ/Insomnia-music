@@ -8,6 +8,7 @@ const api: AppApi = {
     home: (filter) => ipcRenderer.invoke(IPC.musicHome, filter),
     search: (query, filter) => ipcRenderer.invoke(IPC.musicSearch, query, filter),
     searchMore: (query, filter) => ipcRenderer.invoke(IPC.musicSearchMore, query, filter),
+    topResultAction: (actionId) => ipcRenderer.invoke(IPC.musicSearchTopAction, actionId),
     collection: (kind, id) => ipcRenderer.invoke(IPC.musicCollection, kind, id),
     collectionMore: (kind, id) => ipcRenderer.invoke(IPC.musicCollectionMore, kind, id),
     albumYears: (ids) => ipcRenderer.invoke(IPC.musicAlbumYears, ids),

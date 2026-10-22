@@ -2,6 +2,7 @@ export const IPC = {
   musicHome: 'music:home',
   musicSearch: 'music:search',
   musicSearchMore: 'music:search:more',
+  musicSearchTopAction: 'music:search:top-action',
   musicCollection: 'music:collection',
   musicCollectionMore: 'music:collection:more',
   musicAlbumYears: 'music:album:years',

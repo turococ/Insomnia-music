@@ -43,6 +43,10 @@ export function registerIpc(): void {
     musicService.searchMore(requireString(query, 'query', 200), requireSearchFilter(filter))
   )
 
+  ipcMain.handle(IPC.musicSearchTopAction, (_event, actionId: unknown) =>
+    musicService.topResultAction(requireString(actionId, 'top result action', 64))
+  )
+
   ipcMain.handle(IPC.musicCollection, (_event, kind: unknown, id: unknown) => {
     const collectionKind = requireString(kind, 'collection kind', 20)
     if (!COLLECTION_KINDS.includes(collectionKind as CollectionKind)) {
