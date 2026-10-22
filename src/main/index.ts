@@ -5,8 +5,10 @@ import icon from '../../resources/icon.png?asset'
 import { registerIpc } from './ipc'
 import { musicService } from './yt/music'
 
-if (is.dev && process.env['MUSE_DEBUG_PORT']) {
-  app.commandLine.appendSwitch('remote-debugging-port', process.env['MUSE_DEBUG_PORT'])
+app.setName('ToneGlass')
+
+if (is.dev && process.env['TONEGLASS_DEBUG_PORT']) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env['TONEGLASS_DEBUG_PORT'])
 }
 
 function createWindow(): void {
@@ -44,7 +46,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.toneglass.app')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

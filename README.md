@@ -1,6 +1,10 @@
-# ytm-client
+# ToneGlass
 
-An Electron application with React and TypeScript
+An open-source, customizable desktop client for YouTube Music.
+
+> Sound, shaped by you. Born on Arch, at home everywhere.
+
+ToneGlass is not affiliated with YouTube or Google.
 
 ## Recommended IDE Setup
 

@@ -117,7 +117,7 @@ function getAudio(): HTMLAudioElement {
   audio = new Audio()
   audio.preload = 'auto'
 
-  const storedVolume = Number(localStorage.getItem('muse:volume') ?? '0.8')
+  const storedVolume = Number(localStorage.getItem('toneglass:volume') ?? '0.8')
   audio.volume = Number.isFinite(storedVolume) ? Math.min(1, Math.max(0, storedVolume)) : 0.8
   usePlayer.setState({ volume: audio.volume })
 
@@ -165,7 +165,7 @@ function getAudio(): HTMLAudioElement {
 
   setupMediaSession()
   if (import.meta.env.DEV) {
-    Object.assign(window, { __museAudio: audio })
+    Object.assign(window, { __toneglassAudio: audio })
   }
   return audio
 }
@@ -330,7 +330,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     player.volume = next
     player.muted = next === 0
     set({ volume: next, muted: next === 0 })
-    localStorage.setItem('muse:volume', String(next))
+    localStorage.setItem('toneglass:volume', String(next))
   },
 
   toggleMute: () => {
@@ -350,5 +350,5 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 }))
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { __musePlayer: usePlayer })
+  Object.assign(window, { __toneglassPlayer: usePlayer })
 }

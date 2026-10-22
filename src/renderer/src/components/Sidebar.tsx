@@ -18,7 +18,7 @@ export function Sidebar(): React.JSX.Element {
         </div>
         <div>
           <div className="flex items-center gap-2 text-[17px] font-semibold tracking-tight">
-            Muse
+            ToneGlass
             <span className="rounded-full border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-accent">
               beta
             </span>
@@ -90,7 +90,7 @@ export function Sidebar(): React.JSX.Element {
         </button>
       </div>
 
-      <div className="mt-4 px-2 text-[10px] text-faint">Muse 0.1.0 · unofficial client</div>
+      <div className="mt-4 px-2 text-[10px] text-faint">ToneGlass 0.1.0 · unofficial client</div>
     </aside>
   )
 }

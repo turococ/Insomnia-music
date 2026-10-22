@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: ytm-client
+appId: com.toneglass.app
+productName: ToneGlass
 directories:
   buildResources: build
 files:
@@ -12,7 +12,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: ytm-client
+  executableName: toneglass
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

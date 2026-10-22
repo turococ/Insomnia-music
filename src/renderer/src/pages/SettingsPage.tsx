@@ -13,7 +13,7 @@ const accents = [
 type AccentId = (typeof accents)[number]['id']
 
 function storedAccent(): AccentId {
-  const id = localStorage.getItem('muse:accent')
+  const id = localStorage.getItem('toneglass:accent')
   return accents.some((accent) => accent.id === id) ? (id as AccentId) : 'lime'
 }
 
@@ -37,7 +37,7 @@ function Toggle({ enabled }: { enabled?: boolean }): React.JSX.Element {
 
 export function SettingsPage(): React.JSX.Element {
   const [accentId, setAccentId] = useState<AccentId>(storedAccent)
-  const [css, setCss] = useState(() => localStorage.getItem('muse:custom-css') ?? '')
+  const [css, setCss] = useState(() => localStorage.getItem('toneglass:custom-css') ?? '')
 
   const accent = accents.find((option) => option.id === accentId) ?? accents[0]
 
@@ -45,18 +45,18 @@ export function SettingsPage(): React.JSX.Element {
     const root = document.documentElement
     root.style.setProperty('--color-accent', accent.color)
     root.style.setProperty('--color-accent-soft', accent.soft)
-    localStorage.setItem('muse:accent', accent.id)
+    localStorage.setItem('toneglass:accent', accent.id)
   }, [accent])
 
   useEffect(() => {
-    let style = document.getElementById('muse-user-css') as HTMLStyleElement | null
+    let style = document.getElementById('toneglass-user-css') as HTMLStyleElement | null
     if (!style) {
       style = document.createElement('style')
-      style.id = 'muse-user-css'
+      style.id = 'toneglass-user-css'
       document.head.appendChild(style)
     }
     style.textContent = css
-    localStorage.setItem('muse:custom-css', css)
+    localStorage.setItem('toneglass:custom-css', css)
   }, [css])
 
   const reset = (): void => {
@@ -74,7 +74,7 @@ export function SettingsPage(): React.JSX.Element {
           </div>
           <h1 className="mt-2 text-[30px] font-semibold tracking-[-0.03em]">Settings</h1>
           <p className="mt-1 text-[12px] text-faint">
-            Make Muse yours. Themes and custom CSS are stored locally.
+            Make ToneGlass yours. Themes and custom CSS are stored locally.
           </p>
         </div>
         <button
