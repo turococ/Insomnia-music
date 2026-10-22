@@ -1,0 +1,65 @@
+export type MediaKind = 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'podcast'
+
+export interface Thumbnail {
+  url: string
+  width: number
+  height: number
+}
+
+export interface ArtistRef {
+  id?: string
+  name: string
+}
+
+export interface AlbumRef {
+  id?: string
+  name: string
+}
+
+export interface MediaItem {
+  id: string
+  kind: MediaKind
+  title: string
+  subtitle?: string
+  artists: ArtistRef[]
+  album?: AlbumRef
+  year?: string
+  duration?: number
+  thumbnails: Thumbnail[]
+  explicit?: boolean
+}
+
+export interface HomeSection {
+  title: string
+  items: MediaItem[]
+}
+
+export interface HomeData {
+  filters: string[]
+  sections: HomeSection[]
+}
+
+export interface SearchResult {
+  query: string
+  items: MediaItem[]
+}
+
+export interface PlaybackSource {
+  url: string
+  client: string
+  expiresAt: number
+  isLive?: boolean
+  headers?: Record<string, string>
+}
+
+export interface AppApi {
+  music: {
+    home: (filter?: string) => Promise<HomeData>
+    search: (query: string) => Promise<SearchResult>
+    track: (id: string) => Promise<MediaItem | null>
+    lyrics: (id: string) => Promise<string | null>
+  }
+  playback: {
+    resolve: (videoId: string) => Promise<PlaybackSource>
+  }
+}

@@ -1,12 +1,20 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import { IPC } from '../shared/ipc'
+import type { AppApi } from '../shared/types'
 
-// Custom APIs for renderer
-const api = {}
+const api: AppApi = {
+  music: {
+    home: (filter) => ipcRenderer.invoke(IPC.musicHome, filter),
+    search: (query) => ipcRenderer.invoke(IPC.musicSearch, query),
+    track: (id) => ipcRenderer.invoke(IPC.musicTrack, id),
+    lyrics: (id) => ipcRenderer.invoke(IPC.musicLyrics, id)
+  },
+  playback: {
+    resolve: (videoId) => ipcRenderer.invoke(IPC.playbackResolve, videoId)
+  }
+}
 
-// Use `contextBridge` APIs to expose Electron APIs to
-// renderer only if context isolation is enabled, otherwise
-// just add to the DOM global.
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
