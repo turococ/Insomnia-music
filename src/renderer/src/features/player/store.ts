@@ -1,12 +1,18 @@
 import { create } from 'zustand'
-import type { MediaItem } from '@shared/types'
+import type { CollectionKind, MediaItem } from '@shared/types'
 
 export type RepeatMode = 'off' | 'all' | 'one'
+
+export interface QueueSource {
+  kind: CollectionKind
+  id: string
+}
 
 interface PlayerState {
   current: MediaItem | null
   queue: MediaItem[]
   queueIndex: number
+  queueSource: QueueSource | null
   isPlaying: boolean
   isLoading: boolean
   isLive: boolean
@@ -17,8 +23,9 @@ interface PlayerState {
   repeat: RepeatMode
   shuffle: boolean
   error: string | null
-  playTrack: (track: MediaItem, queue?: MediaItem[]) => Promise<void>
-  playQueue: (queue: MediaItem[], index: number) => Promise<void>
+  playTrack: (track: MediaItem, queue?: MediaItem[], source?: QueueSource) => Promise<void>
+  playQueue: (queue: MediaItem[], index: number, source?: QueueSource | null) => Promise<void>
+  appendTracks: (tracks: MediaItem[], source: QueueSource) => boolean
   toggle: () => void
   next: () => void
   previous: () => void
@@ -167,6 +174,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   current: null,
   queue: [],
   queueIndex: -1,
+  queueSource: null,
   isPlaying: false,
   isLoading: false,
   isLive: false,
@@ -178,7 +186,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   shuffle: false,
   error: null,
 
-  playTrack: async (track, queue) => {
+  playTrack: async (track, queue, source) => {
     if (!isPlayable(track)) return
 
     if (get().current?.id === track.id) {
@@ -188,10 +196,10 @@ export const usePlayer = create<PlayerState>((set, get) => ({
 
     const nextQueue = (queue?.length ? queue : [track]).filter(isPlayable)
     const index = nextQueue.findIndex((item) => item.id === track.id)
-    await get().playQueue(nextQueue, index >= 0 ? index : 0)
+    await get().playQueue(nextQueue, index >= 0 ? index : 0, source ?? null)
   },
 
-  playQueue: async (queue, index) => {
+  playQueue: async (queue, index, source = null) => {
     const playable = queue.filter(isPlayable)
     const track = playable[index]
     if (!track) return
@@ -201,6 +209,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
       current: track,
       queue: playable,
       queueIndex: index,
+      queueSource: source,
       isLoading: true,
       isPlaying: false,
       isLive: false,
@@ -226,10 +235,25 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
   },
 
+  appendTracks: (tracks, source) => {
+    const { queue, queueSource } = get()
+    if (!queueSource || queueSource.kind !== source.kind || queueSource.id !== source.id) {
+      return false
+    }
+
+    const playable = tracks.filter(isPlayable)
+    if (playable.length === 0) return false
+
+    set({ queue: [...queue, ...playable] })
+    return true
+  },
+
   toggle: () => {
-    const { current, queue, queueIndex } = get()
+    const { current, queue, queueIndex, queueSource } = get()
     if (!current) {
-      if (queue.length > 0) void get().playQueue(queue, Math.max(0, queueIndex))
+      if (queue.length > 0) {
+        void get().playQueue(queue, Math.max(0, queueIndex), queueSource)
+      }
       return
     }
 
@@ -242,7 +266,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   next: () => {
-    const { queue, queueIndex, repeat, shuffle } = get()
+    const { queue, queueIndex, queueSource, repeat, shuffle } = get()
     if (queue.length === 0) return
 
     if (repeat === 'one') {
@@ -255,17 +279,17 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     if (shuffle && queue.length > 1) {
       let index = queueIndex
       while (index === queueIndex) index = Math.floor(Math.random() * queue.length)
-      void get().playQueue(queue, index)
+      void get().playQueue(queue, index, queueSource)
       return
     }
 
     if (queueIndex + 1 < queue.length) {
-      void get().playQueue(queue, queueIndex + 1)
+      void get().playQueue(queue, queueIndex + 1, queueSource)
       return
     }
 
     if (repeat === 'all') {
-      void get().playQueue(queue, 0)
+      void get().playQueue(queue, 0, queueSource)
       return
     }
 
@@ -274,7 +298,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
   },
 
   previous: () => {
-    const { queue, queueIndex, progress, isLive } = get()
+    const { queue, queueIndex, queueSource, progress, isLive } = get()
     const player = getAudio()
 
     if (!isLive && (progress > 3 || queue.length === 0)) {
@@ -284,7 +308,7 @@ export const usePlayer = create<PlayerState>((set, get) => ({
     }
 
     if (queueIndex > 0) {
-      void get().playQueue(queue, queueIndex - 1)
+      void get().playQueue(queue, queueIndex - 1, queueSource)
     } else if (!isLive) {
       player.currentTime = 0
       set({ progress: 0 })

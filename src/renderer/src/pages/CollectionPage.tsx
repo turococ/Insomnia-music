@@ -1,11 +1,20 @@
-import { ArrowLeft, Disc3, Play, Shuffle, UserRound } from 'lucide-react'
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  Disc3,
+  Loader2,
+  Play,
+  Shuffle,
+  UserRound
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { CollectionKind, MediaItem } from '@shared/types'
 import { MediaRow } from '@renderer/components/MediaRow'
 import { MediaShelf } from '@renderer/components/MediaShelf'
-import { usePlayer } from '@renderer/features/player/store'
+import { usePlayer, type QueueSource } from '@renderer/features/player/store'
 import { cn } from '@renderer/lib/cn'
 import { collectionPath, isPlayable, mergeTracks, pickThumbnail } from '@renderer/lib/media'
 
@@ -13,10 +22,71 @@ interface CollectionPageProps {
   kind: CollectionKind
 }
 
+interface ExtraTrackState {
+  key: string
+  tracks: MediaItem[]
+  hasMore: boolean
+}
+
+interface TrackListProps {
+  title: string
+  tracks: MediaItem[]
+  countLabel: string
+  onPlay: (track: MediaItem) => void
+  footer?: React.ReactNode
+}
+
 const KIND_LABELS: Record<CollectionKind, string> = {
   album: 'Album',
   playlist: 'Playlist',
   artist: 'Artist'
+}
+
+function TrackList({
+  title,
+  tracks,
+  countLabel,
+  onPlay,
+  footer
+}: TrackListProps): React.JSX.Element {
+  return (
+    <section>
+      <div className="mb-3 flex items-end justify-between gap-4">
+        <div>
+          <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
+          <p className="mt-0.5 text-[11px] text-faint">{countLabel}</p>
+        </div>
+      </div>
+
+      {tracks.length > 0 ? (
+        <div className="rounded-2xl border border-line/60 bg-surface/30 p-2">
+          <div className="hidden grid-cols-[28px_44px_minmax(0,2.2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 pb-2 pt-1 text-[10px] uppercase tracking-[0.14em] text-faint sm:grid">
+            <span>#</span>
+            <span />
+            <span>Title</span>
+            <span>Album</span>
+            <span className="text-right">Time</span>
+          </div>
+          <div className="space-y-0.5">
+            {tracks.map((track, index) => (
+              <MediaRow
+                key={`${track.kind}:${track.id}:${index}`}
+                item={track}
+                index={index}
+                onPlay={onPlay}
+              />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-dashed border-line p-8 text-center">
+          <p className="text-sm text-muted">No playable tracks were found here.</p>
+        </div>
+      )}
+
+      {footer && <div className="mt-3">{footer}</div>}
+    </section>
+  )
 }
 
 function CollectionSkeleton(): React.JSX.Element {
@@ -51,7 +121,12 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const playTrack = usePlayer((state) => state.playTrack)
+  const appendTracks = usePlayer((state) => state.appendTracks)
   const [failedCovers, setFailedCovers] = useState<Set<string>>(() => new Set())
+  const [extraTracks, setExtraTracks] = useState<ExtraTrackState | null>(null)
+  const [showAllSongs, setShowAllSongs] = useState(false)
+  const [loadMoreError, setLoadMoreError] = useState(false)
+  const collectionKey = `${kind}:${id ?? ''}`
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['collection', kind, id],
@@ -59,10 +134,30 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
     enabled: Boolean(id)
   })
 
+  const loadMore = useMutation({
+    mutationFn: () => window.api.music.collectionMore(kind, id ?? ''),
+    onSuccess: (page) => {
+      setLoadMoreError(false)
+      if (id && page.tracks.length > 0) {
+        appendTracks(page.tracks, { kind, id })
+      }
+
+      setExtraTracks((previous) => ({
+        key: collectionKey,
+        tracks: [...(previous?.key === collectionKey ? previous.tracks : []), ...page.tracks],
+        hasMore: page.hasMore
+      }))
+    },
+    onError: () => setLoadMoreError(true)
+  })
+
   useEffect(() => {
     document.querySelector('main')?.scrollTo({ top: 0 })
     setFailedCovers(new Set())
-  }, [kind, id])
+    setExtraTracks(null)
+    setShowAllSongs(false)
+    setLoadMoreError(false)
+  }, [collectionKey])
 
   if (isLoading) return <CollectionSkeleton />
 
@@ -103,18 +198,39 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const coverCandidates = [headerCover, fallbackCover].filter((url): url is string => Boolean(url))
   const cover = coverCandidates.find((url) => !failedCovers.has(url))
   const showCover = Boolean(cover)
-  const tracks = data.tracks
+  const loadedTracks =
+    kind === 'playlist' && extraTracks?.key === collectionKey
+      ? [...data.tracks, ...extraTracks.tracks]
+      : data.tracks
+  const artistTracks = kind === 'artist' ? (data.allTracks ?? []) : []
+  const queueTracks = artistTracks.length > 0 ? artistTracks : loadedTracks
+  const hasMore =
+    kind === 'playlist' &&
+    (extraTracks?.key === collectionKey ? extraTracks.hasMore : Boolean(data.hasMore))
   const tracksTitle = kind === 'artist' ? 'Top songs' : kind === 'album' ? 'Tracklist' : 'Songs'
   const details = [data.subtitle, data.meta].filter(Boolean).join(' • ')
+  const source: QueueSource | undefined = id ? { kind, id } : undefined
+  const totalTracks = data.totalTracks
+  const countLabel =
+    kind === 'playlist' && totalTracks && totalTracks > loadedTracks.length
+      ? `${loadedTracks.length} of ${totalTracks} tracks`
+      : `${loadedTracks.length} ${loadedTracks.length === 1 ? 'track' : 'tracks'}`
+  const topSongsLabel = `${data.tracks.length} ${data.tracks.length === 1 ? 'track' : 'tracks'}`
+  const allSongsLabel = `${artistTracks.length} ${artistTracks.length === 1 ? 'song' : 'songs'}`
+  const visibleArtistTracks = showAllSongs ? artistTracks : artistTracks.slice(0, 10)
 
   const playAll = (): void => {
-    if (tracks.length > 0) void playTrack(tracks[0], tracks)
+    if (queueTracks.length > 0) void playTrack(queueTracks[0], queueTracks, source)
   }
 
   const shufflePlay = (): void => {
-    if (tracks.length === 0) return
-    const shuffled = [...tracks].sort(() => Math.random() - 0.5)
-    void playTrack(shuffled[0], shuffled)
+    if (queueTracks.length === 0) return
+    const shuffled = [...queueTracks].sort(() => Math.random() - 0.5)
+    void playTrack(shuffled[0], shuffled, source)
+  }
+
+  const playCollectionTrack = (track: MediaItem): void => {
+    void playTrack(track, queueTracks, source)
   }
 
   const handleSectionSelect = (item: MediaItem, sectionItems: MediaItem[]): void => {
@@ -222,7 +338,7 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
                 <button
                   type="button"
                   onClick={playAll}
-                  disabled={tracks.length === 0}
+                  disabled={queueTracks.length === 0}
                   className="flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-[13px] font-semibold text-accent-ink shadow-lg shadow-accent/15 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Play className="size-4 fill-current" />
@@ -231,7 +347,7 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
                 <button
                   type="button"
                   onClick={shufflePlay}
-                  disabled={tracks.length === 0}
+                  disabled={queueTracks.length === 0}
                   className="flex items-center gap-2 rounded-full border border-line bg-surface-2/60 px-5 py-2.5 text-[13px] font-medium text-muted transition hover:border-accent/30 hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Shuffle className="size-4" />
@@ -244,44 +360,61 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
       </div>
 
       <div className="space-y-10 px-8 pt-8">
-        <section>
-          <div className="mb-3 flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-ink">
-                {tracksTitle}
-              </h2>
-              <p className="mt-0.5 text-[11px] text-faint">
-                {tracks.length} {tracks.length === 1 ? 'track' : 'tracks'}
-              </p>
-            </div>
-          </div>
+        <TrackList
+          title={tracksTitle}
+          tracks={kind === 'artist' ? data.tracks : loadedTracks}
+          countLabel={kind === 'artist' ? topSongsLabel : countLabel}
+          onPlay={playCollectionTrack}
+          footer={
+            hasMore ? (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => void loadMore.mutate()}
+                  disabled={loadMore.isPending}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink disabled:cursor-wait disabled:opacity-60"
+                >
+                  {loadMore.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <ChevronDown className="size-4" />
+                  )}
+                  {loadMore.isPending ? 'Loading more tracks…' : 'Load more tracks'}
+                </button>
+                {loadMoreError && (
+                  <p className="mt-2 text-center text-[11px] text-red-300/90">
+                    Could not load more tracks. Try again.
+                  </p>
+                )}
+              </div>
+            ) : undefined
+          }
+        />
 
-          {tracks.length > 0 ? (
-            <div className="rounded-2xl border border-line/60 bg-surface/30 p-2">
-              <div className="hidden grid-cols-[28px_44px_minmax(0,2.2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 pb-2 pt-1 text-[10px] uppercase tracking-[0.14em] text-faint sm:grid">
-                <span>#</span>
-                <span />
-                <span>Title</span>
-                <span>Album</span>
-                <span className="text-right">Time</span>
-              </div>
-              <div className="space-y-0.5">
-                {tracks.map((track, index) => (
-                  <MediaRow
-                    key={`${track.kind}:${track.id}:${index}`}
-                    item={track}
-                    index={index}
-                    onPlay={(selected) => void playTrack(selected, tracks)}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-line p-8 text-center">
-              <p className="text-sm text-muted">No playable tracks were found here.</p>
-            </div>
-          )}
-        </section>
+        {kind === 'artist' && artistTracks.length > 0 && (
+          <TrackList
+            title="All songs"
+            tracks={visibleArtistTracks}
+            countLabel={allSongsLabel}
+            onPlay={playCollectionTrack}
+            footer={
+              artistTracks.length > 10 ? (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSongs((value) => !value)}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink"
+                >
+                  {showAllSongs ? (
+                    <ChevronUp className="size-4" />
+                  ) : (
+                    <ChevronDown className="size-4" />
+                  )}
+                  {showAllSongs ? 'Show less' : `Show all ${artistTracks.length} songs`}
+                </button>
+              ) : undefined
+            }
+          />
+        )}
 
         {data.sections.map((section) => (
           <MediaShelf

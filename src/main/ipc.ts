@@ -38,6 +38,17 @@ export function registerIpc(): void {
     )
   })
 
+  ipcMain.handle(IPC.musicCollectionMore, (_event, kind: unknown, id: unknown) => {
+    const collectionKind = requireString(kind, 'collection kind', 20)
+    if (!COLLECTION_KINDS.includes(collectionKind as CollectionKind)) {
+      throw new Error('Invalid collection kind')
+    }
+    return musicService.collectionMore(
+      collectionKind as CollectionKind,
+      requireString(id, 'collection id', 200)
+    )
+  })
+
   ipcMain.handle(IPC.musicTrack, (_event, id: unknown) =>
     musicService.track(requireString(id, 'track id', 200))
   )

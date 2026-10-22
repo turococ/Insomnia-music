@@ -55,7 +55,15 @@ export interface CollectionData {
   author?: ArtistRef
   thumbnails: Thumbnail[]
   tracks: MediaItem[]
+  allTracks?: MediaItem[]
   sections: CollectionSection[]
+  hasMore?: boolean
+  totalTracks?: number
+}
+
+export interface CollectionTrackPage {
+  tracks: MediaItem[]
+  hasMore: boolean
 }
 
 export interface SearchResult {
@@ -76,6 +84,7 @@ export interface AppApi {
     home: (filter?: string) => Promise<HomeData>
     search: (query: string) => Promise<SearchResult>
     collection: (kind: CollectionKind, id: string) => Promise<CollectionData>
+    collectionMore: (kind: CollectionKind, id: string) => Promise<CollectionTrackPage>
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (id: string) => Promise<string | null>
   }

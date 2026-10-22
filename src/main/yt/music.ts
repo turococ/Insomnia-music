@@ -5,6 +5,7 @@ import type {
   CollectionData,
   CollectionKind,
   CollectionSection,
+  CollectionTrackPage,
   MediaItem,
   MediaKind,
   PlaybackSource,
@@ -47,12 +48,15 @@ interface AlbumPage {
 interface PlaylistPage {
   header?: unknown
   contents?: unknown[]
+  has_continuation?: boolean
+  getContinuation?: () => Promise<PlaylistPage>
   getRelated?: () => Promise<unknown>
 }
 
 interface ArtistPage {
   header?: unknown
   sections?: unknown[]
+  getAllSongs?: () => Promise<MediaSection | undefined>
 }
 
 interface MediaSection {
@@ -61,11 +65,18 @@ interface MediaSection {
   contents?: unknown[]
 }
 
+interface PlaylistContext {
+  page: PlaylistPage
+  thumbnails: MediaItem['thumbnails']
+}
+
 class MusicService {
   private yt: Innertube | null = null
   private initPromise: Promise<Innertube> | null = null
   private sourceCache = new Map<string, CachedSource>()
   private pendingSources = new Map<string, Promise<PlaybackSource>>()
+  private playlistContexts = new Map<string, PlaylistContext>()
+  private pendingCollectionMore = new Map<string, Promise<CollectionTrackPage>>()
 
   async init(): Promise<Innertube> {
     if (this.yt) return this.yt
@@ -196,11 +207,74 @@ class MusicService {
     switch (kind) {
       case 'album':
         return this.mapAlbum(await music.getAlbum(id), id)
-      case 'playlist':
-        return this.mapPlaylist(await music.getPlaylist(id), id)
+      case 'playlist': {
+        const playlist = await music.getPlaylist(id)
+        const data = await this.mapPlaylist(playlist, id)
+        this.playlistContexts.set(id, { page: playlist, thumbnails: data.thumbnails })
+        return data
+      }
       case 'artist':
         return this.mapArtist(await music.getArtist(id), id)
     }
+  }
+
+  async collectionMore(kind: CollectionKind, id: string): Promise<CollectionTrackPage> {
+    if (kind !== 'playlist') return { tracks: [], hasMore: false }
+
+    const pending = this.pendingCollectionMore.get(id)
+    if (pending) return pending
+
+    const task = this.loadMorePlaylist(id).finally(() => {
+      this.pendingCollectionMore.delete(id)
+    })
+    this.pendingCollectionMore.set(id, task)
+    return task
+  }
+
+  private async loadMorePlaylist(id: string): Promise<CollectionTrackPage> {
+    let context = this.playlistContexts.get(id)
+
+    if (!context) {
+      const playlist = await (await this.music()).getPlaylist(id)
+      context = {
+        page: playlist,
+        thumbnails: this.headerThumbnails(playlist.header)
+      }
+      this.playlistContexts.set(id, context)
+    }
+
+    const page = context.page
+    if (!page.has_continuation || !page.getContinuation) {
+      return { tracks: [], hasMore: false }
+    }
+
+    const next = await this.getPlaylistContinuation(page)
+    this.playlistContexts.set(id, { page: next, thumbnails: context.thumbnails })
+    const tracks = this.mapTracks(next.contents, {
+      thumbnails: context.thumbnails,
+      forceSong: true
+    })
+
+    return { tracks, hasMore: Boolean(next.has_continuation) }
+  }
+
+  private async getPlaylistContinuation(page: PlaylistPage): Promise<PlaylistPage> {
+    const continuation = page.getContinuation
+    if (!continuation) throw new Error('Playlist continuation is unavailable')
+
+    let lastError: unknown
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await continuation.call(page)
+      } catch (error) {
+        lastError = error
+        if (attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 700))
+        }
+      }
+    }
+
+    throw lastError
   }
 
   private mapAlbum(album: AlbumPage, id: string): CollectionData {
@@ -208,28 +282,26 @@ class MusicService {
     const title = this.text(this.headerField(header, 'title')) ?? 'Album'
     const thumbnails = this.headerThumbnails(header)
     const author = this.headerAuthor(header)
-    const tracks = (album.contents ?? [])
-      .map((raw) =>
-        this.mapTrack(raw, {
-          album: { id, name: title },
-          artist: author,
-          thumbnails,
-          forceSong: true
-        })
-      )
-      .filter((item): item is MediaItem => item !== null)
+    const meta = this.text(this.headerField(header, 'second_subtitle'))
+    const tracks = this.mapTracks(album.contents, {
+      album: { id, name: title },
+      artist: author,
+      thumbnails,
+      forceSong: true
+    })
 
     return {
       id,
       kind: 'album',
       title,
       subtitle: this.text(this.headerField(header, 'subtitle')),
-      meta: this.text(this.headerField(header, 'second_subtitle')),
+      meta,
       description: this.headerDescription(header),
       author,
       thumbnails,
       tracks,
-      sections: this.mapSections(album.sections)
+      sections: this.mapSections(album.sections),
+      totalTracks: this.parseTrackCount(meta)
     }
   }
 
@@ -238,14 +310,11 @@ class MusicService {
     const title = this.text(this.headerField(header, 'title')) ?? 'Playlist'
     const thumbnails = this.headerThumbnails(header)
     const author = this.headerAuthor(header)
-    const tracks = (playlist.contents ?? [])
-      .map((raw) =>
-        this.mapTrack(raw, {
-          thumbnails,
-          forceSong: true
-        })
-      )
-      .filter((item): item is MediaItem => item !== null)
+    const meta = this.text(this.headerField(header, 'second_subtitle'))
+    const tracks = this.mapTracks(playlist.contents, {
+      thumbnails,
+      forceSong: true
+    })
 
     let sections: CollectionSection[] = []
     try {
@@ -263,16 +332,18 @@ class MusicService {
       kind: 'playlist',
       title,
       subtitle: this.text(this.headerField(header, 'subtitle')),
-      meta: this.text(this.headerField(header, 'second_subtitle')),
+      meta,
       description: this.headerDescription(header),
       author,
       thumbnails,
       tracks,
-      sections
+      sections,
+      hasMore: Boolean(playlist.has_continuation),
+      totalTracks: this.parseTrackCount(meta)
     }
   }
 
-  private mapArtist(artist: ArtistPage, id: string): CollectionData {
+  private async mapArtist(artist: ArtistPage, id: string): Promise<CollectionData> {
     const header = artist.header
     const title = this.text(this.headerField(header, 'title')) ?? 'Artist'
     const thumbnails = this.headerThumbnails(header)
@@ -281,25 +352,50 @@ class MusicService {
       this.sectionTitle(section)?.toLowerCase().includes('top songs')
     )
     const topSongsItems = (topSongs as MediaSection | undefined)?.contents ?? []
-    const tracks = topSongsItems
-      .map((raw) =>
-        this.mapTrack(raw, {
-          artist: { id, name: title },
-          thumbnails,
-          forceSong: true
-        })
+    const fallback = {
+      artist: { id, name: title },
+      thumbnails,
+      forceSong: true
+    }
+    let tracks = this.mapTracks(topSongsItems, fallback)
+    let allTracks: MediaItem[] = []
+
+    try {
+      const allSongs = await artist.getAllSongs?.()
+      if (allSongs) allTracks = this.mapTracks(allSongs.contents, fallback)
+    } catch (error) {
+      console.warn(
+        '[collection] could not load all artist songs:',
+        error instanceof Error ? error.message : error
       )
-      .filter((item): item is MediaItem => item !== null)
+    }
+
+    if (allTracks.length > 0) {
+      const fullById = new Map(allTracks.map((track) => [track.id, track]))
+      tracks = tracks.map((track) => {
+        const full = fullById.get(track.id)
+        if (!full) return track
+        return {
+          ...track,
+          duration: track.duration ?? full.duration,
+          album: track.album ?? full.album,
+          thumbnails: track.thumbnails.length > 0 ? track.thumbnails : full.thumbnails
+        }
+      })
+    }
 
     return {
       id,
       kind: 'artist',
       title,
       subtitle: this.text(this.headerField(header, 'subtitle')),
+      meta: allTracks.length > 0 ? `${allTracks.length} songs` : undefined,
       description: this.headerDescription(header),
       thumbnails,
       tracks,
-      sections: this.mapSections(rawSections.filter((section) => section !== topSongs))
+      allTracks: allTracks.length > 0 ? allTracks : undefined,
+      sections: this.mapSections(rawSections.filter((section) => section !== topSongs)),
+      totalTracks: allTracks.length > 0 ? allTracks.length : undefined
     }
   }
 
@@ -320,6 +416,15 @@ class MusicService {
 
     const text = stringifier.call(value).trim()
     return text && text !== '[object Object]' && text.toUpperCase() !== 'N/A' ? text : undefined
+  }
+
+  private parseTrackCount(value: string | undefined): number | undefined {
+    if (!value) return undefined
+    const match = value.match(/([\d][\d,.]*)\s+(?:songs?|tracks?)/i)
+    if (!match) return undefined
+
+    const count = Number(match[1].replace(/[^\d]/g, ''))
+    return Number.isFinite(count) && count > 0 ? count : undefined
   }
 
   private headerThumbnails(header: unknown): MediaItem['thumbnails'] {
@@ -381,6 +486,20 @@ class MusicService {
     }
 
     return sections
+  }
+
+  private mapTracks(
+    rawItems: unknown[] | undefined,
+    fallback: {
+      album?: AlbumRef
+      artist?: ArtistRef
+      thumbnails?: MediaItem['thumbnails']
+      forceSong?: boolean
+    } = {}
+  ): MediaItem[] {
+    return (rawItems ?? [])
+      .map((raw) => this.mapTrack(raw, fallback))
+      .filter((item): item is MediaItem => item !== null)
   }
 
   private mapTrack(
