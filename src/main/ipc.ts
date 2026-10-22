@@ -1,10 +1,22 @@
 import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
-import type { CollectionKind } from '@shared/types'
+import type { CollectionKind, SearchFilter } from '@shared/types'
 import { mediaProxy } from './media-proxy'
 import { musicService } from './yt/music'
 
 const COLLECTION_KINDS: CollectionKind[] = ['album', 'playlist', 'artist']
+const SEARCH_FILTERS: SearchFilter[] = ['all', 'song', 'album', 'artist', 'playlist', 'video']
+
+function requireSearchFilter(value: unknown): SearchFilter {
+  if (value === undefined || value === null) return 'all'
+
+  const filter = requireString(value, 'search filter', 20)
+  if (!SEARCH_FILTERS.includes(filter as SearchFilter)) {
+    throw new Error('Invalid search filter')
+  }
+
+  return filter as SearchFilter
+}
 
 function requireString(value: unknown, field: string, maxLength = 512): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -23,8 +35,12 @@ export function registerIpc(): void {
     return musicService.home(selected)
   })
 
-  ipcMain.handle(IPC.musicSearch, (_event, query: unknown) =>
-    musicService.search(requireString(query, 'query', 200))
+  ipcMain.handle(IPC.musicSearch, (_event, query: unknown, filter: unknown) =>
+    musicService.search(requireString(query, 'query', 200), requireSearchFilter(filter))
+  )
+
+  ipcMain.handle(IPC.musicSearchMore, (_event, query: unknown, filter: unknown) =>
+    musicService.searchMore(requireString(query, 'query', 200), requireSearchFilter(filter))
   )
 
   ipcMain.handle(IPC.musicCollection, (_event, kind: unknown, id: unknown) => {

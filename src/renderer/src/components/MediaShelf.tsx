@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Play } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, type ReactNode } from 'react'
 import type { MediaItem } from '@shared/types'
 import { MediaCard } from '@renderer/components/MediaCard'
 import { mergeTracks } from '@renderer/lib/media'
@@ -8,9 +8,10 @@ interface MediaShelfProps {
   title: string
   items: MediaItem[]
   onSelect: (item: MediaItem, sectionItems: MediaItem[]) => void
+  action?: ReactNode
 }
 
-export function MediaShelf({ title, items, onSelect }: MediaShelfProps): React.JSX.Element {
+export function MediaShelf({ title, items, onSelect, action }: MediaShelfProps): React.JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const tracks = mergeTracks(items)
 
@@ -28,6 +29,7 @@ export function MediaShelf({ title, items, onSelect }: MediaShelfProps): React.J
       <div className="mb-3 flex items-center justify-between gap-4">
         <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
         <div className="flex items-center gap-1.5">
+          {action}
           {tracks.length > 0 && (
             <button
               type="button"

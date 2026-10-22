@@ -1,5 +1,6 @@
 export type MediaKind = 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'podcast'
 export type CollectionKind = 'album' | 'playlist' | 'artist'
+export type SearchFilter = 'all' | 'song' | 'album' | 'artist' | 'playlist' | 'video'
 
 export interface Thumbnail {
   url: string
@@ -69,7 +70,15 @@ export interface CollectionTrackPage {
 
 export interface SearchResult {
   query: string
+  filter: SearchFilter
+  topResult?: MediaItem
   items: MediaItem[]
+  hasMore: boolean
+}
+
+export interface SearchMoreResult {
+  items: MediaItem[]
+  hasMore: boolean
 }
 
 export interface PlaybackSource {
@@ -83,7 +92,8 @@ export interface PlaybackSource {
 export interface AppApi {
   music: {
     home: (filter?: string) => Promise<HomeData>
-    search: (query: string) => Promise<SearchResult>
+    search: (query: string, filter?: SearchFilter) => Promise<SearchResult>
+    searchMore: (query: string, filter: SearchFilter) => Promise<SearchMoreResult>
     collection: (kind: CollectionKind, id: string) => Promise<CollectionData>
     collectionMore: (kind: CollectionKind, id: string) => Promise<CollectionTrackPage>
     albumYears: (ids: string[]) => Promise<Record<string, number>>

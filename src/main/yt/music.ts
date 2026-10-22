@@ -1,4 +1,4 @@
-import type { Innertube } from 'youtubei.js'
+import type { Innertube, Misc } from 'youtubei.js'
 import type {
   AlbumRef,
   ArtistRef,
@@ -11,6 +11,8 @@ import type {
   PlaybackSource,
   HomeData,
   HomeSection,
+  SearchFilter,
+  SearchMoreResult,
   SearchResult
 } from '@shared/types'
 import { APP_USER_AGENT } from './constants'
@@ -20,10 +22,26 @@ const PLAYBACK_CLIENTS = ['YTMUSIC', 'IOS', 'ANDROID_VR'] as const
 const STREAM_TTL_MS = 5 * 60 * 1000
 
 type YtMusic = Innertube['music']
+type YtSearch = Awaited<ReturnType<YtMusic['search']>>
+type YtSearchContinuation = Awaited<ReturnType<YtSearch['getContinuation']>>
+type SearchContext = YtSearch | YtSearchContinuation
 
 interface CachedSource {
   source: PlaybackSource
   expiresAt: number
+}
+
+interface SearchCardFields {
+  type?: string
+  title?: unknown
+  subtitle?: unknown
+  thumbnail?: { contents?: unknown[] } | null
+  on_tap?: {
+    payload?: {
+      browseId?: string
+      videoId?: string
+    }
+  }
 }
 
 interface PageHeaderFields {
@@ -78,6 +96,8 @@ class MusicService {
   private pendingSources = new Map<string, Promise<PlaybackSource>>()
   private playlistContexts = new Map<string, PlaylistContext>()
   private pendingCollectionMore = new Map<string, Promise<CollectionTrackPage>>()
+  private searchContexts = new Map<string, SearchContext>()
+  private pendingSearchMore = new Map<string, Promise<SearchMoreResult>>()
   private albumYearCache = new Map<string, number>()
 
   async init(): Promise<Innertube> {
@@ -176,31 +196,206 @@ class MusicService {
     return { filters, sections }
   }
 
-  async search(query: string): Promise<SearchResult> {
+  async search(query: string, filter: SearchFilter = 'all'): Promise<SearchResult> {
     const trimmed = query.trim()
-    if (!trimmed) return { query: '', items: [] }
+    if (!trimmed) return { query: '', filter, items: [], hasMore: false }
 
     const music = await this.music()
-    const search = await music.search(trimmed)
-    const seen = new Set<string>()
-    const items: MediaItem[] = []
+    const search = await music.search(trimmed, filter === 'all' ? undefined : { type: filter })
+    const { topResult, items } = this.mapSearch(search)
+    const key = this.searchKey(trimmed, filter)
+
+    if (filter !== 'all') this.rememberSearchContext(key, search)
+
+    return {
+      query: trimmed,
+      filter,
+      topResult,
+      items,
+      hasMore: filter !== 'all' && search.has_continuation
+    }
+  }
+
+  async searchMore(query: string, filter: SearchFilter): Promise<SearchMoreResult> {
+    const trimmed = query.trim()
+    if (!trimmed || filter === 'all') return { items: [], hasMore: false }
+
+    const key = this.searchKey(trimmed, filter)
+    const pending = this.pendingSearchMore.get(key)
+    if (pending) return pending
+
+    const task = this.loadMoreSearch(trimmed, filter, key).finally(() => {
+      this.pendingSearchMore.delete(key)
+    })
+    this.pendingSearchMore.set(key, task)
+    return task
+  }
+
+  private searchKey(query: string, filter: SearchFilter): string {
+    return `${filter}:${query}`
+  }
+
+  private rememberSearchContext(key: string, context: SearchContext): void {
+    this.searchContexts.delete(key)
+    this.searchContexts.set(key, context)
+    if (this.searchContexts.size <= 24) return
+
+    const oldestKey = this.searchContexts.keys().next().value
+    if (oldestKey) this.searchContexts.delete(oldestKey)
+  }
+
+  private async loadMoreSearch(
+    query: string,
+    filter: SearchFilter,
+    key: string
+  ): Promise<SearchMoreResult> {
+    const context = this.searchContexts.get(key)
+
+    if (!context) {
+      // The main process may have restarted since the first page was loaded.
+      // Recover the context, then let the renderer deduplicate the repeated items.
+      const initial = await this.search(query, filter)
+      return { items: initial.items, hasMore: initial.hasMore }
+    }
+
+    if (!context.has_continuation) return { items: [], hasMore: false }
+
+    const next = await context.getContinuation()
+    this.rememberSearchContext(key, next)
+
+    const contents = (next.contents as { contents?: unknown[] } | undefined)?.contents
+    return {
+      items: this.mapSearchItems(contents),
+      hasMore: next.has_continuation
+    }
+  }
+
+  private mapSearch(search: YtSearch): { topResult?: MediaItem; items: MediaItem[] } {
+    let topResult: MediaItem | undefined
+    const rawItems: unknown[] = []
 
     for (const section of search.contents ?? []) {
-      // The top result card is often a radio/playlist; the regular sections
-      // below it contain the actual songs, albums and artists.
-      if (section.type === 'MusicCardShelf') continue
+      const value = section as { type?: string; contents?: unknown[] }
 
-      for (const raw of section.contents ?? []) {
-        const item = this.mapItem(raw)
-        if (!item) continue
-        const key = `${item.kind}:${item.id}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        items.push(item)
+      if (value.type === 'MusicCardShelf') {
+        if (!topResult) topResult = this.mapSearchCard(section)
+        continue
+      }
+
+      if (value.type === 'MusicShelf' || value.type === 'ItemSection') {
+        rawItems.push(...(value.contents ?? []))
       }
     }
 
-    return { query: trimmed, items }
+    const items = this.mapSearchItems(rawItems)
+
+    if (!topResult) return { items }
+
+    const match = items.find((item) => item.kind === topResult?.kind && item.id === topResult?.id)
+    if (match) {
+      topResult = {
+        ...topResult,
+        artists: topResult.artists.length > 0 ? topResult.artists : match.artists,
+        album: topResult.album ?? match.album,
+        year: topResult.year ?? match.year,
+        plays: topResult.plays ?? match.plays,
+        duration: topResult.duration ?? match.duration,
+        thumbnails: topResult.thumbnails.length > 0 ? topResult.thumbnails : match.thumbnails
+      }
+    }
+
+    const topKey = `${topResult.kind}:${topResult.id}`
+    return {
+      topResult,
+      items: items.filter((item) => `${item.kind}:${item.id}` !== topKey)
+    }
+  }
+
+  private mapSearchItems(rawItems: unknown[] | undefined): MediaItem[] {
+    const seen = new Set<string>()
+    const items: MediaItem[] = []
+
+    for (const raw of rawItems ?? []) {
+      const item = this.mapItem(raw)
+      if (!item) continue
+
+      // YouTube Music mixes user profiles into artist searches. They are not
+      // artist pages and cannot be opened by the artist route.
+      if (item.kind === 'artist' && item.subtitle?.toLowerCase().startsWith('profile')) continue
+
+      const key = `${item.kind}:${item.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push(item)
+    }
+
+    return items
+  }
+
+  private mapSearchCard(raw: unknown): MediaItem | undefined {
+    const card = raw as SearchCardFields
+    const title = this.text(card.title)
+    const subtitle = this.text(card.subtitle)
+    const payload = card.on_tap?.payload
+    const browseId = payload?.browseId
+    const videoId = payload?.videoId
+    const kind = this.searchCardKind(subtitle, browseId, videoId)
+
+    if (!kind || !title) return undefined
+    if (kind === 'artist' && subtitle?.toLowerCase().startsWith('profile')) return undefined
+
+    const id = kind === 'song' || kind === 'video' ? videoId : browseId
+    if (!id) return undefined
+
+    const parts =
+      subtitle
+        ?.split('•')
+        .map((part) => part.trim())
+        .filter(Boolean) ?? []
+    const artistName = parts[1]
+    const artists =
+      artistName &&
+      kind !== 'artist' &&
+      !/^[\d.,]+\s*[KMB]?\s+(?:views|plays|subscribers)/i.test(artistName)
+        ? [{ name: artistName }]
+        : []
+    const year = this.parseYear(parts.at(-1))
+    const plays = parts
+      .map((part) => this.parseCompactNumber(part))
+      .find((value): value is number => value !== undefined)
+
+    return {
+      id,
+      kind,
+      title,
+      subtitle,
+      artists,
+      year: year ? String(year) : undefined,
+      plays,
+      duration: this.parseDurationText(subtitle),
+      thumbnails: this.mapThumbnails(card.thumbnail?.contents)
+    }
+  }
+
+  private searchCardKind(
+    subtitle: string | undefined,
+    browseId: string | undefined,
+    videoId: string | undefined
+  ): MediaKind | undefined {
+    const type = subtitle?.split('•')[0]?.trim().toLowerCase() ?? ''
+
+    if (type.startsWith('artist')) return 'artist'
+    if (type.startsWith('album') || type.startsWith('single') || type === 'ep') return 'album'
+    if (type.startsWith('playlist')) return 'playlist'
+    if (type.startsWith('song')) return 'song'
+    if (type.startsWith('video')) return 'video'
+    if (type.startsWith('podcast')) return 'podcast'
+
+    if (videoId) return 'video'
+    if (browseId?.startsWith('UC')) return 'artist'
+    if (browseId?.startsWith('MPR')) return 'album'
+    if (browseId?.startsWith('VL')) return 'playlist'
+    return undefined
   }
 
   async collection(kind: CollectionKind, id: string): Promise<CollectionData> {
@@ -506,6 +701,18 @@ class MusicService {
     return Math.round(amount * multiplier)
   }
 
+  private parseDurationText(value: string | undefined): number | undefined {
+    if (!value) return undefined
+
+    const match = value.match(/\b(?:(\d{1,2}):)?(\d{1,3}):([0-5]\d)\b/)
+    if (!match) return undefined
+
+    const hours = match[1] ? Number(match[1]) : 0
+    const minutes = Number(match[2])
+    const seconds = Number(match[3])
+    return hours * 3600 + minutes * 60 + seconds
+  }
+
   private albumYear(header: unknown): number | undefined {
     const direct = this.parseYear(this.headerField(header, 'year'))
     if (direct) return direct
@@ -741,7 +948,7 @@ class MusicService {
     throw new Error(`Could not resolve playback for ${videoId}. ${errors.join(' | ')}`)
   }
 
-  private chooseAudioFormat(info: Awaited<ReturnType<Innertube['getInfo']>>) {
+  private chooseAudioFormat(info: Awaited<ReturnType<Innertube['getInfo']>>): Misc.Format {
     try {
       // Electron's bundled Chromium may not decode AAC. Opus in WebM is
       // universally supported and usually has the best available bitrate too.

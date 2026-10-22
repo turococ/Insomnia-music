@@ -6,7 +6,8 @@ import type { AppApi } from '../shared/types'
 const api: AppApi = {
   music: {
     home: (filter) => ipcRenderer.invoke(IPC.musicHome, filter),
-    search: (query) => ipcRenderer.invoke(IPC.musicSearch, query),
+    search: (query, filter) => ipcRenderer.invoke(IPC.musicSearch, query, filter),
+    searchMore: (query, filter) => ipcRenderer.invoke(IPC.musicSearchMore, query, filter),
     collection: (kind, id) => ipcRenderer.invoke(IPC.musicCollection, kind, id),
     collectionMore: (kind, id) => ipcRenderer.invoke(IPC.musicCollectionMore, kind, id),
     albumYears: (ids) => ipcRenderer.invoke(IPC.musicAlbumYears, ids),
