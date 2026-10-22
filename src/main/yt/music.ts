@@ -30,6 +30,7 @@ interface PageHeaderFields {
   title?: unknown
   subtitle?: unknown
   second_subtitle?: unknown
+  year?: unknown
   description?: unknown
   thumbnails?: unknown
   thumbnail?: { contents?: unknown[] } | null
@@ -77,6 +78,7 @@ class MusicService {
   private pendingSources = new Map<string, Promise<PlaybackSource>>()
   private playlistContexts = new Map<string, PlaylistContext>()
   private pendingCollectionMore = new Map<string, Promise<CollectionTrackPage>>()
+  private albumYearCache = new Map<string, number>()
 
   async init(): Promise<Innertube> {
     if (this.yt) return this.yt
@@ -231,6 +233,49 @@ class MusicService {
     return task
   }
 
+  async albumYears(ids: string[]): Promise<Record<string, number>> {
+    const unique = [...new Set(ids.filter((id) => typeof id === 'string' && id.length > 0))].slice(
+      0,
+      300
+    )
+    const result: Record<string, number> = {}
+    const missing: string[] = []
+
+    for (const id of unique) {
+      const cached = this.albumYearCache.get(id)
+      if (cached) result[id] = cached
+      else missing.push(id)
+    }
+
+    if (missing.length === 0) return result
+
+    const music = await this.music()
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (cursor < missing.length) {
+        const id = missing[cursor]
+        cursor += 1
+
+        try {
+          const album = await music.getAlbum(id)
+          const year = this.albumYear(album.header)
+          if (year) {
+            this.albumYearCache.set(id, year)
+            result[id] = year
+          }
+        } catch (error) {
+          console.warn(
+            `[collection] could not load album year for ${id}:`,
+            error instanceof Error ? error.message : error
+          )
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(4, missing.length) }, () => worker()))
+    return result
+  }
+
   private async loadMorePlaylist(id: string): Promise<CollectionTrackPage> {
     let context = this.playlistContexts.get(id)
 
@@ -352,17 +397,23 @@ class MusicService {
       this.sectionTitle(section)?.toLowerCase().includes('top songs')
     )
     const topSongsItems = (topSongs as MediaSection | undefined)?.contents ?? []
+    const sectionAlbumYears = this.sectionAlbumYears(rawSections)
     const fallback = {
       artist: { id, name: title },
       thumbnails,
       forceSong: true
     }
-    let tracks = this.mapTracks(topSongsItems, fallback)
+    let tracks = this.applyTrackYears(this.mapTracks(topSongsItems, fallback), sectionAlbumYears)
     let allTracks: MediaItem[] = []
 
     try {
       const allSongs = await artist.getAllSongs?.()
-      if (allSongs) allTracks = this.mapTracks(allSongs.contents, fallback)
+      if (allSongs) {
+        allTracks = this.applyTrackYears(
+          this.mapTracks(allSongs.contents, fallback),
+          sectionAlbumYears
+        )
+      }
     } catch (error) {
       console.warn(
         '[collection] could not load all artist songs:',
@@ -379,6 +430,8 @@ class MusicService {
           ...track,
           duration: track.duration ?? full.duration,
           album: track.album ?? full.album,
+          year: track.year ?? full.year,
+          plays: track.plays ?? full.plays,
           thumbnails: track.thumbnails.length > 0 ? track.thumbnails : full.thumbnails
         }
       })
@@ -425,6 +478,64 @@ class MusicService {
 
     const count = Number(match[1].replace(/[^\d]/g, ''))
     return Number.isFinite(count) && count > 0 ? count : undefined
+  }
+
+  private parseYear(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value !== 'string') return undefined
+
+    const match = value.match(/\b(19|20)\d{2}\b/)
+    if (!match) return undefined
+
+    const year = Number(match[0])
+    return year >= 1900 && year <= new Date().getFullYear() + 1 ? year : undefined
+  }
+
+  private parseCompactNumber(value: string | undefined): number | undefined {
+    if (!value) return undefined
+
+    const match = value.trim().match(/^([\d.,]+)\s*([KMB])?\s+plays?$/i)
+    if (!match) return undefined
+
+    const amount = Number(match[1].replace(/,/g, ''))
+    if (!Number.isFinite(amount)) return undefined
+
+    const suffix = match[2]?.toUpperCase()
+    const multiplier =
+      suffix === 'B' ? 1_000_000_000 : suffix === 'M' ? 1_000_000 : suffix === 'K' ? 1_000 : 1
+    return Math.round(amount * multiplier)
+  }
+
+  private albumYear(header: unknown): number | undefined {
+    const direct = this.parseYear(this.headerField(header, 'year'))
+    if (direct) return direct
+
+    return this.parseYear(this.text(this.headerField(header, 'subtitle')))
+  }
+
+  private sectionAlbumYears(sections: unknown[]): Map<string, number> {
+    const years = new Map<string, number>()
+
+    for (const section of sections) {
+      for (const item of (section as MediaSection | undefined)?.contents ?? []) {
+        const value = item as { item_type?: string; id?: string; year?: unknown }
+        if (value.item_type !== 'album' || !value.id) continue
+
+        const year = this.parseYear(value.year)
+        if (year) years.set(value.id, year)
+      }
+    }
+
+    return years
+  }
+
+  private applyTrackYears(tracks: MediaItem[], years: Map<string, number>): MediaItem[] {
+    return tracks.map((track) => {
+      if (track.year || !track.album?.id) return track
+
+      const year = years.get(track.album.id)
+      return year ? { ...track, year: String(year) } : track
+    })
   }
 
   private headerThumbnails(header: unknown): MediaItem['thumbnails'] {
@@ -692,6 +803,10 @@ class MusicService {
       : flexAlbum?.text
         ? { id: flexAlbum.endpoint?.payload?.browseId, name: flexAlbum.text }
         : undefined
+    const plays = item.flex_columns
+      ?.flatMap((column) => column.title?.runs ?? [])
+      .map((run) => this.parseCompactNumber(run.text))
+      .find((value): value is number => value !== undefined)
     const subtitle = this.text(item.subtitle)
 
     return {
@@ -702,6 +817,7 @@ class MusicService {
       artists,
       album,
       year: item.year,
+      plays,
       duration: item.duration?.seconds,
       thumbnails
     }

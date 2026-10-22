@@ -49,6 +49,16 @@ export function registerIpc(): void {
     )
   })
 
+  ipcMain.handle(IPC.musicAlbumYears, (_event, ids: unknown) => {
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 300) {
+      throw new Error('Invalid album ids')
+    }
+
+    return musicService.albumYears(
+      ids.map((id, index) => requireString(id, `album id ${index + 1}`, 200))
+    )
+  })
+
   ipcMain.handle(IPC.musicTrack, (_event, id: unknown) =>
     musicService.track(requireString(id, 'track id', 200))
   )

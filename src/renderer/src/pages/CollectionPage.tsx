@@ -1,7 +1,7 @@
 import {
   ArrowLeft,
   ChevronDown,
-  ChevronUp,
+  ChevronRight,
   Disc3,
   Loader2,
   Play,
@@ -12,8 +12,8 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { CollectionKind, MediaItem } from '@shared/types'
-import { MediaRow } from '@renderer/components/MediaRow'
 import { MediaShelf } from '@renderer/components/MediaShelf'
+import { TrackList } from '@renderer/components/TrackList'
 import { usePlayer, type QueueSource } from '@renderer/features/player/store'
 import { cn } from '@renderer/lib/cn'
 import { collectionPath, isPlayable, mergeTracks, pickThumbnail } from '@renderer/lib/media'
@@ -28,65 +28,10 @@ interface ExtraTrackState {
   hasMore: boolean
 }
 
-interface TrackListProps {
-  title: string
-  tracks: MediaItem[]
-  countLabel: string
-  onPlay: (track: MediaItem) => void
-  footer?: React.ReactNode
-}
-
 const KIND_LABELS: Record<CollectionKind, string> = {
   album: 'Album',
   playlist: 'Playlist',
   artist: 'Artist'
-}
-
-function TrackList({
-  title,
-  tracks,
-  countLabel,
-  onPlay,
-  footer
-}: TrackListProps): React.JSX.Element {
-  return (
-    <section>
-      <div className="mb-3 flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
-          <p className="mt-0.5 text-[11px] text-faint">{countLabel}</p>
-        </div>
-      </div>
-
-      {tracks.length > 0 ? (
-        <div className="rounded-2xl border border-line/60 bg-surface/30 p-2">
-          <div className="hidden grid-cols-[28px_44px_minmax(0,2.2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 pb-2 pt-1 text-[10px] uppercase tracking-[0.14em] text-faint sm:grid">
-            <span>#</span>
-            <span />
-            <span>Title</span>
-            <span>Album</span>
-            <span className="text-right">Time</span>
-          </div>
-          <div className="space-y-0.5">
-            {tracks.map((track, index) => (
-              <MediaRow
-                key={`${track.kind}:${track.id}:${index}`}
-                item={track}
-                index={index}
-                onPlay={onPlay}
-              />
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-dashed border-line p-8 text-center">
-          <p className="text-sm text-muted">No playable tracks were found here.</p>
-        </div>
-      )}
-
-      {footer && <div className="mt-3">{footer}</div>}
-    </section>
-  )
 }
 
 function CollectionSkeleton(): React.JSX.Element {
@@ -124,14 +69,14 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const appendTracks = usePlayer((state) => state.appendTracks)
   const [failedCovers, setFailedCovers] = useState<Set<string>>(() => new Set())
   const [extraTracks, setExtraTracks] = useState<ExtraTrackState | null>(null)
-  const [showAllSongs, setShowAllSongs] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState(false)
   const collectionKey = `${kind}:${id ?? ''}`
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['collection', kind, id],
     queryFn: () => window.api.music.collection(kind, id ?? ''),
-    enabled: Boolean(id)
+    enabled: Boolean(id),
+    staleTime: 5 * 60 * 1000
   })
 
   const loadMore = useMutation({
@@ -155,7 +100,6 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
     document.querySelector('main')?.scrollTo({ top: 0 })
     setFailedCovers(new Set())
     setExtraTracks(null)
-    setShowAllSongs(false)
     setLoadMoreError(false)
   }, [collectionKey])
 
@@ -216,8 +160,6 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
       ? `${loadedTracks.length} of ${totalTracks} tracks`
       : `${loadedTracks.length} ${loadedTracks.length === 1 ? 'track' : 'tracks'}`
   const topSongsLabel = `${data.tracks.length} ${data.tracks.length === 1 ? 'track' : 'tracks'}`
-  const allSongsLabel = `${artistTracks.length} ${artistTracks.length === 1 ? 'song' : 'songs'}`
-  const visibleArtistTracks = showAllSongs ? artistTracks : artistTracks.slice(0, 10)
 
   const playAll = (): void => {
     if (queueTracks.length > 0) void playTrack(queueTracks[0], queueTracks, source)
@@ -365,6 +307,18 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
           tracks={kind === 'artist' ? data.tracks : loadedTracks}
           countLabel={kind === 'artist' ? topSongsLabel : countLabel}
           onPlay={playCollectionTrack}
+          action={
+            kind === 'artist' && id && artistTracks.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => navigate(`/artist/${id}/songs`)}
+                className="flex items-center gap-1 rounded-full border border-line/70 bg-surface/40 px-3.5 py-2 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink"
+              >
+                All songs
+                <ChevronRight className="size-3.5" />
+              </button>
+            ) : undefined
+          }
           footer={
             hasMore ? (
               <div>
@@ -390,31 +344,6 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
             ) : undefined
           }
         />
-
-        {kind === 'artist' && artistTracks.length > 0 && (
-          <TrackList
-            title="All songs"
-            tracks={visibleArtistTracks}
-            countLabel={allSongsLabel}
-            onPlay={playCollectionTrack}
-            footer={
-              artistTracks.length > 10 ? (
-                <button
-                  type="button"
-                  onClick={() => setShowAllSongs((value) => !value)}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink"
-                >
-                  {showAllSongs ? (
-                    <ChevronUp className="size-4" />
-                  ) : (
-                    <ChevronDown className="size-4" />
-                  )}
-                  {showAllSongs ? 'Show less' : `Show all ${artistTracks.length} songs`}
-                </button>
-              ) : undefined
-            }
-          />
-        )}
 
         {data.sections.map((section) => (
           <MediaShelf

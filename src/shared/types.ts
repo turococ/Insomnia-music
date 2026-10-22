@@ -25,6 +25,7 @@ export interface MediaItem {
   artists: ArtistRef[]
   album?: AlbumRef
   year?: string
+  plays?: number
   duration?: number
   thumbnails: Thumbnail[]
   explicit?: boolean
@@ -85,6 +86,7 @@ export interface AppApi {
     search: (query: string) => Promise<SearchResult>
     collection: (kind: CollectionKind, id: string) => Promise<CollectionData>
     collectionMore: (kind: CollectionKind, id: string) => Promise<CollectionTrackPage>
+    albumYears: (ids: string[]) => Promise<Record<string, number>>
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (id: string) => Promise<string | null>
   }
