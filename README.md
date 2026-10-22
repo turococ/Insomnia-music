@@ -4,10 +4,6 @@ An open-source, customizable desktop client for YouTube Music.
 
 ToneGlass is not affiliated with YouTube or Google.
 
-## Recommended IDE Setup
-
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
-
 ## Build from source
 
 ### Install
