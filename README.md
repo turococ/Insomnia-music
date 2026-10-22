@@ -8,7 +8,7 @@ ToneGlass is not affiliated with YouTube or Google.
 
 - [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
 
-## Project Setup
+## Build from source
 
 ### Install
 
