@@ -23,6 +23,17 @@ export function itemSubtitle(item: MediaItem): string {
   return item.subtitle ?? ''
 }
 
+export function isPlayable(item: MediaItem): boolean {
+  return item.kind === 'song' || item.kind === 'video'
+}
+
+export function collectionPath(item: MediaItem): string | undefined {
+  if (item.kind !== 'album' && item.kind !== 'playlist' && item.kind !== 'artist') {
+    return undefined
+  }
+  return `/${item.kind}/${item.id}`
+}
+
 export function mergeTracks(items: MediaItem[]): MediaItem[] {
-  return items.filter((item) => item.kind === 'song' || item.kind === 'video')
+  return items.filter(isPlayable)
 }

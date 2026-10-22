@@ -6,6 +6,7 @@ import { PlayerBar } from './features/player/PlayerBar'
 import { usePlayer } from './features/player/store'
 import { HomePage } from './pages/HomePage'
 import { LibraryPage } from './pages/LibraryPage'
+import { CollectionPage } from './pages/CollectionPage'
 import { SearchPage } from './pages/SearchPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -27,6 +28,9 @@ function App(): React.JSX.Element {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/search" element={<SearchPage />} />
+              <Route path="/album/:id" element={<CollectionPage kind="album" />} />
+              <Route path="/playlist/:id" element={<CollectionPage kind="playlist" />} />
+              <Route path="/artist/:id" element={<CollectionPage kind="artist" />} />
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

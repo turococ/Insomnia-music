@@ -1,11 +1,18 @@
-import { ChevronLeft, ChevronRight, Pause, Play, Sparkles } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { Pause, Play, Sparkles } from 'lucide-react'
+import { useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import type { MediaItem } from '@shared/types'
-import { MediaCard } from '@renderer/components/MediaCard'
+import { MediaShelf } from '@renderer/components/MediaShelf'
 import { usePlayer } from '@renderer/features/player/store'
 import { cn } from '@renderer/lib/cn'
-import { itemSubtitle, mergeTracks, pickThumbnail } from '@renderer/lib/media'
+import {
+  collectionPath,
+  isPlayable,
+  itemSubtitle,
+  mergeTracks,
+  pickThumbnail
+} from '@renderer/lib/media'
 
 function greeting(): string {
   const hour = new Date().getHours()
@@ -124,78 +131,6 @@ function QuickPicks({
   )
 }
 
-function Shelf({
-  title,
-  items,
-  onSelect
-}: {
-  title: string
-  items: MediaItem[]
-  onSelect: (item: MediaItem, sectionItems: MediaItem[]) => void
-}): React.JSX.Element {
-  const scroller = useRef<HTMLDivElement>(null)
-  const tracks = mergeTracks(items)
-
-  const scroll = (direction: -1 | 1): void => {
-    const element = scroller.current
-    if (!element) return
-    element.scrollBy({
-      left: direction * Math.max(360, element.clientWidth * 0.8),
-      behavior: 'smooth'
-    })
-  }
-
-  return (
-    <section>
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
-        <div className="flex items-center gap-1.5">
-          {tracks.length > 0 && (
-            <button
-              type="button"
-              onClick={() => onSelect(tracks[0], items)}
-              aria-label={`Play ${title}`}
-              className="grid size-8 place-items-center rounded-full border border-line/80 bg-surface-2/60 text-muted transition hover:border-accent/30 hover:text-ink"
-            >
-              <Play className="ml-0.5 size-3.5 fill-current" />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => scroll(-1)}
-            aria-label="Scroll left"
-            className="grid size-8 place-items-center rounded-full border border-line/80 bg-surface-2/60 text-muted transition hover:border-line hover:text-ink"
-          >
-            <ChevronLeft className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => scroll(1)}
-            aria-label="Scroll right"
-            className="grid size-8 place-items-center rounded-full border border-line/80 bg-surface-2/60 text-muted transition hover:border-line hover:text-ink"
-          >
-            <ChevronRight className="size-4" />
-          </button>
-        </div>
-      </div>
-
-      <div
-        ref={scroller}
-        className="no-scrollbar -mx-2 flex gap-4 overflow-x-auto scroll-smooth px-2 pb-1"
-      >
-        {items.slice(0, 20).map((item) => (
-          <div
-            key={`${item.kind}:${item.id}`}
-            className="w-[156px] shrink-0 sm:w-[168px] xl:w-[180px]"
-          >
-            <MediaCard item={item} onSelect={(selected) => onSelect(selected, items)} />
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 function HomeSkeleton(): React.JSX.Element {
   return (
     <div className="space-y-9 p-8">
@@ -246,6 +181,7 @@ function HomeSkeleton(): React.JSX.Element {
 
 export function HomePage(): React.JSX.Element {
   const playTrack = usePlayer((state) => state.playTrack)
+  const navigate = useNavigate()
   const [filter, setFilter] = useState<string | null>(null)
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
@@ -262,6 +198,16 @@ export function HomePage(): React.JSX.Element {
     if (tracks.some((track) => track.id === item.id)) {
       void playTrack(item, tracks)
     }
+  }
+
+  const handleSelect = (item: MediaItem, sectionItems: MediaItem[]): void => {
+    if (isPlayable(item)) {
+      handlePlay(item, sectionItems)
+      return
+    }
+
+    const path = collectionPath(item)
+    if (path) navigate(path)
   }
 
   if (isLoading) return <HomeSkeleton />
@@ -342,11 +288,11 @@ export function HomePage(): React.JSX.Element {
               onPlay={handlePlay}
             />
           ) : (
-            <Shelf
+            <MediaShelf
               key={section.title}
               title={section.title}
               items={section.items}
-              onSelect={handlePlay}
+              onSelect={handleSelect}
             />
           )
         )}

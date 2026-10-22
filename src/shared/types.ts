@@ -1,4 +1,5 @@
 export type MediaKind = 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'podcast'
+export type CollectionKind = 'album' | 'playlist' | 'artist'
 
 export interface Thumbnail {
   url: string
@@ -39,6 +40,24 @@ export interface HomeData {
   sections: HomeSection[]
 }
 
+export interface CollectionSection {
+  title: string
+  items: MediaItem[]
+}
+
+export interface CollectionData {
+  id: string
+  kind: CollectionKind
+  title: string
+  subtitle?: string
+  meta?: string
+  description?: string
+  author?: ArtistRef
+  thumbnails: Thumbnail[]
+  tracks: MediaItem[]
+  sections: CollectionSection[]
+}
+
 export interface SearchResult {
   query: string
   items: MediaItem[]
@@ -56,6 +75,7 @@ export interface AppApi {
   music: {
     home: (filter?: string) => Promise<HomeData>
     search: (query: string) => Promise<SearchResult>
+    collection: (kind: CollectionKind, id: string) => Promise<CollectionData>
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (id: string) => Promise<string | null>
   }

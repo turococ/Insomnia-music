@@ -1,5 +1,10 @@
 import type { Innertube } from 'youtubei.js'
 import type {
+  AlbumRef,
+  ArtistRef,
+  CollectionData,
+  CollectionKind,
+  CollectionSection,
   MediaItem,
   MediaKind,
   PlaybackSource,
@@ -18,6 +23,42 @@ type YtMusic = Innertube['music']
 interface CachedSource {
   source: PlaybackSource
   expiresAt: number
+}
+
+interface PageHeaderFields {
+  title?: unknown
+  subtitle?: unknown
+  second_subtitle?: unknown
+  description?: unknown
+  thumbnails?: unknown
+  thumbnail?: { contents?: unknown[] } | null
+  strapline_text_one?: {
+    endpoint?: { payload?: { browseId?: string } }
+  }
+  author?: { name?: string; channel_id?: string }
+}
+
+interface AlbumPage {
+  header?: unknown
+  contents?: unknown[]
+  sections?: unknown[]
+}
+
+interface PlaylistPage {
+  header?: unknown
+  contents?: unknown[]
+  getRelated?: () => Promise<unknown>
+}
+
+interface ArtistPage {
+  header?: unknown
+  sections?: unknown[]
+}
+
+interface MediaSection {
+  title?: unknown
+  header?: { title?: unknown }
+  contents?: unknown[]
 }
 
 class MusicService {
@@ -147,6 +188,220 @@ class MusicService {
     }
 
     return { query: trimmed, items }
+  }
+
+  async collection(kind: CollectionKind, id: string): Promise<CollectionData> {
+    const music = await this.music()
+
+    switch (kind) {
+      case 'album':
+        return this.mapAlbum(await music.getAlbum(id), id)
+      case 'playlist':
+        return this.mapPlaylist(await music.getPlaylist(id), id)
+      case 'artist':
+        return this.mapArtist(await music.getArtist(id), id)
+    }
+  }
+
+  private mapAlbum(album: AlbumPage, id: string): CollectionData {
+    const header = album.header
+    const title = this.text(this.headerField(header, 'title')) ?? 'Album'
+    const thumbnails = this.headerThumbnails(header)
+    const author = this.headerAuthor(header)
+    const tracks = (album.contents ?? [])
+      .map((raw) =>
+        this.mapTrack(raw, {
+          album: { id, name: title },
+          artist: author,
+          thumbnails,
+          forceSong: true
+        })
+      )
+      .filter((item): item is MediaItem => item !== null)
+
+    return {
+      id,
+      kind: 'album',
+      title,
+      subtitle: this.text(this.headerField(header, 'subtitle')),
+      meta: this.text(this.headerField(header, 'second_subtitle')),
+      description: this.headerDescription(header),
+      author,
+      thumbnails,
+      tracks,
+      sections: this.mapSections(album.sections)
+    }
+  }
+
+  private async mapPlaylist(playlist: PlaylistPage, id: string): Promise<CollectionData> {
+    const header = playlist.header
+    const title = this.text(this.headerField(header, 'title')) ?? 'Playlist'
+    const thumbnails = this.headerThumbnails(header)
+    const author = this.headerAuthor(header)
+    const tracks = (playlist.contents ?? [])
+      .map((raw) =>
+        this.mapTrack(raw, {
+          thumbnails,
+          forceSong: true
+        })
+      )
+      .filter((item): item is MediaItem => item !== null)
+
+    let sections: CollectionSection[] = []
+    try {
+      const related = await playlist.getRelated?.()
+      if (related) sections = this.mapSections([related])
+    } catch (error) {
+      console.warn(
+        '[collection] could not load related playlists:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    return {
+      id,
+      kind: 'playlist',
+      title,
+      subtitle: this.text(this.headerField(header, 'subtitle')),
+      meta: this.text(this.headerField(header, 'second_subtitle')),
+      description: this.headerDescription(header),
+      author,
+      thumbnails,
+      tracks,
+      sections
+    }
+  }
+
+  private mapArtist(artist: ArtistPage, id: string): CollectionData {
+    const header = artist.header
+    const title = this.text(this.headerField(header, 'title')) ?? 'Artist'
+    const thumbnails = this.headerThumbnails(header)
+    const rawSections = artist.sections ?? []
+    const topSongs = rawSections.find((section) =>
+      this.sectionTitle(section)?.toLowerCase().includes('top songs')
+    )
+    const topSongsItems = (topSongs as MediaSection | undefined)?.contents ?? []
+    const tracks = topSongsItems
+      .map((raw) =>
+        this.mapTrack(raw, {
+          artist: { id, name: title },
+          thumbnails,
+          forceSong: true
+        })
+      )
+      .filter((item): item is MediaItem => item !== null)
+
+    return {
+      id,
+      kind: 'artist',
+      title,
+      subtitle: this.text(this.headerField(header, 'subtitle')),
+      description: this.headerDescription(header),
+      thumbnails,
+      tracks,
+      sections: this.mapSections(rawSections.filter((section) => section !== topSongs))
+    }
+  }
+
+  private headerField(header: unknown, field: keyof PageHeaderFields): unknown {
+    return (header as PageHeaderFields | undefined)?.[field]
+  }
+
+  private text(value: unknown): string | undefined {
+    if (value === null || value === undefined) return undefined
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed && trimmed.toUpperCase() !== 'N/A' ? trimmed : undefined
+    }
+    if (typeof value !== 'object') return undefined
+
+    const stringifier = (value as { toString?: () => string }).toString
+    if (typeof stringifier !== 'function') return undefined
+
+    const text = stringifier.call(value).trim()
+    return text && text !== '[object Object]' && text.toUpperCase() !== 'N/A' ? text : undefined
+  }
+
+  private headerThumbnails(header: unknown): MediaItem['thumbnails'] {
+    const value = header as PageHeaderFields | undefined
+    return this.mapThumbnails(value?.thumbnails ?? value?.thumbnail?.contents)
+  }
+
+  private headerDescription(header: unknown): string | undefined {
+    const description = (header as PageHeaderFields | undefined)?.description
+    if (!description) return undefined
+
+    if (typeof description === 'object' && 'description' in description) {
+      return this.text((description as { description?: unknown }).description)
+    }
+
+    return this.text(description)
+  }
+
+  private headerAuthor(header: unknown): ArtistRef | undefined {
+    const value = header as PageHeaderFields | undefined
+    const name = this.text(value?.strapline_text_one) ?? value?.author?.name
+    if (!name) return undefined
+
+    return {
+      id: value?.strapline_text_one?.endpoint?.payload?.browseId ?? value?.author?.channel_id,
+      name
+    }
+  }
+
+  private sectionTitle(section: unknown): string | undefined {
+    const value = section as MediaSection | undefined
+    return this.text(value?.title) ?? this.text(value?.header?.title)
+  }
+
+  private mapSections(rawSections: unknown[] | undefined): CollectionSection[] {
+    const sections: CollectionSection[] = []
+    const seenTitles = new Set<string>()
+
+    for (const raw of rawSections ?? []) {
+      const title = this.sectionTitle(raw)
+      if (!title || seenTitles.has(title)) continue
+
+      const section = raw as MediaSection
+      const seenItems = new Set<string>()
+      const items = (section.contents ?? [])
+        .map((item) => this.mapItem(item))
+        .filter((item): item is MediaItem => {
+          if (!item) return false
+          const key = `${item.kind}:${item.id}`
+          if (seenItems.has(key)) return false
+          seenItems.add(key)
+          return true
+        })
+
+      if (items.length > 0) {
+        seenTitles.add(title)
+        sections.push({ title, items })
+      }
+    }
+
+    return sections
+  }
+
+  private mapTrack(
+    raw: unknown,
+    fallback: {
+      album?: AlbumRef
+      artist?: ArtistRef
+      thumbnails?: MediaItem['thumbnails']
+      forceSong?: boolean
+    } = {}
+  ): MediaItem | null {
+    const item = this.mapItem(raw)
+    if (!item || (item.kind !== 'song' && item.kind !== 'video')) return null
+
+    return {
+      ...item,
+      kind: fallback.forceSong ? 'song' : item.kind,
+      artists: item.artists.length > 0 ? item.artists : fallback.artist ? [fallback.artist] : [],
+      album: item.album ?? fallback.album,
+      thumbnails: item.thumbnails.length > 0 ? item.thumbnails : (fallback.thumbnails ?? [])
+    }
   }
 
   async track(id: string): Promise<MediaItem | null> {
@@ -279,8 +534,17 @@ class MusicService {
       duration?: { seconds: number }
       year?: string
       artists?: Array<{ channel_id?: string; name: string }>
+      authors?: Array<{ channel_id?: string; name: string }>
       author?: { channel_id?: string; name: string }
       album?: { id?: string; name: string }
+      flex_columns?: Array<{
+        title?: {
+          runs?: Array<{
+            text?: string
+            endpoint?: { payload?: { browseId?: string } }
+          }>
+        }
+      }>
     }
 
     if (!item || (item.type !== 'MusicResponsiveListItem' && item.type !== 'MusicTwoRowItem')) {
@@ -293,21 +557,31 @@ class MusicService {
     }
 
     const id = item.id
-    const title = item.title?.toString() ?? item.name ?? ''
+    const title = this.text(item.title) ?? item.name ?? ''
     if (!id || !title) return null
 
     const thumbnails = this.mapThumbnails(item.thumbnails ?? item.thumbnail)
     const artists =
       item.artists?.map((artist) => ({ id: artist.channel_id, name: artist.name })) ??
+      item.authors?.map((artist) => ({ id: artist.channel_id, name: artist.name })) ??
       (item.author ? [{ id: item.author.channel_id, name: item.author.name }] : [])
+    const flexAlbum = item.flex_columns
+      ?.flatMap((column) => column.title?.runs ?? [])
+      .find((run) => run.text && run.endpoint?.payload?.browseId?.startsWith('MPR'))
+    const album = item.album
+      ? { id: item.album.id, name: item.album.name }
+      : flexAlbum?.text
+        ? { id: flexAlbum.endpoint?.payload?.browseId, name: flexAlbum.text }
+        : undefined
+    const subtitle = this.text(item.subtitle)
 
     return {
       id,
       kind,
       title,
-      subtitle: item.subtitle?.toString() ?? artists.map((artist) => artist.name).join(' • '),
+      subtitle: subtitle ?? artists.map((artist) => artist.name).join(' • '),
       artists,
-      album: item.album ? { id: item.album.id, name: item.album.name } : undefined,
+      album,
       year: item.year,
       duration: item.duration?.seconds,
       thumbnails

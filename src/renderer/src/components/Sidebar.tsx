@@ -66,10 +66,10 @@ export function Sidebar(): React.JSX.Element {
         </div>
         <div className="space-y-2 text-[12px] text-muted">
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
-            Album &amp; playlist pages
+            Queue &amp; synced lyrics
           </div>
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
-            Queue &amp; synced lyrics
+            Library &amp; account sync
           </div>
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
             Offline downloads

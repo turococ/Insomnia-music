@@ -5,7 +5,7 @@ import type { MediaItem } from '@shared/types'
 import { MediaCard } from '@renderer/components/MediaCard'
 import { MediaRow } from '@renderer/components/MediaRow'
 import { usePlayer } from '@renderer/features/player/store'
-import { mergeTracks } from '@renderer/lib/media'
+import { collectionPath, isPlayable, mergeTracks } from '@renderer/lib/media'
 
 const suggestions = ['Lofi beats', 'Jazz', 'Synthwave', 'Focus', '90s hip hop', 'Ambient']
 
@@ -44,6 +44,16 @@ export function SearchPage(): React.JSX.Element {
     void playTrack(item, queue)
   }
 
+  const openItem = (item: MediaItem): void => {
+    if (isPlayable(item)) {
+      play(item)
+      return
+    }
+
+    const path = collectionPath(item)
+    if (path) navigate(path)
+  }
+
   if (!query) {
     return (
       <div className="flex h-full items-center justify-center p-8">
@@ -53,8 +63,8 @@ export function SearchPage(): React.JSX.Element {
           </div>
           <h1 className="mt-5 text-2xl font-semibold tracking-tight">Find something to play</h1>
           <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted">
-            Search across songs, albums, playlists and artists. Your queue is built from the
-            results automatically.
+            Search across songs, albums, playlists and artists. Your queue is built from the results
+            automatically.
           </p>
           <div className="mt-7 flex flex-wrap justify-center gap-2">
             {suggestions.map((suggestion) => (
@@ -130,7 +140,12 @@ export function SearchPage(): React.JSX.Element {
           </div>
           <div className="space-y-0.5">
             {tracks.map((track, index) => (
-              <MediaRow key={`${track.kind}:${track.id}`} item={track} index={index} onPlay={play} />
+              <MediaRow
+                key={`${track.kind}:${track.id}`}
+                item={track}
+                index={index}
+                onPlay={play}
+              />
             ))}
           </div>
         </section>
@@ -141,11 +156,11 @@ export function SearchPage(): React.JSX.Element {
           <h2 className="mb-4 text-[15px] font-semibold tracking-tight">More results</h2>
           <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {[...artists, ...albums].slice(0, 10).map((item) => (
-              <MediaCard key={`${item.kind}:${item.id}`} item={item} onSelect={() => undefined} />
+              <MediaCard key={`${item.kind}:${item.id}`} item={item} onSelect={openItem} />
             ))}
           </div>
           <p className="mt-4 text-[11px] text-faint">
-            Album, playlist and artist pages are the next milestone. Tracks are playable now.
+            Open an album, playlist or artist to see the full tracklist.
           </p>
         </section>
       )}

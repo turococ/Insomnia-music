@@ -1,7 +1,10 @@
 import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
+import type { CollectionKind } from '@shared/types'
 import { mediaProxy } from './media-proxy'
 import { musicService } from './yt/music'
+
+const COLLECTION_KINDS: CollectionKind[] = ['album', 'playlist', 'artist']
 
 function requireString(value: unknown, field: string, maxLength = 512): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -23,6 +26,17 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.musicSearch, (_event, query: unknown) =>
     musicService.search(requireString(query, 'query', 200))
   )
+
+  ipcMain.handle(IPC.musicCollection, (_event, kind: unknown, id: unknown) => {
+    const collectionKind = requireString(kind, 'collection kind', 20)
+    if (!COLLECTION_KINDS.includes(collectionKind as CollectionKind)) {
+      throw new Error('Invalid collection kind')
+    }
+    return musicService.collection(
+      collectionKind as CollectionKind,
+      requireString(id, 'collection id', 200)
+    )
+  })
 
   ipcMain.handle(IPC.musicTrack, (_event, id: unknown) =>
     musicService.track(requireString(id, 'track id', 200))
