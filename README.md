@@ -1,5 +1,4 @@
 # ToneGlass
-#> Sound, shaped by you.
 
 An open-source, customizable desktop client for YouTube Music.
 
