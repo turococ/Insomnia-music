@@ -8,15 +8,18 @@ import {
   Shuffle,
   UserRound
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { CollectionKind, MediaItem } from '@shared/types'
 import { MediaShelf } from '@renderer/components/MediaShelf'
 import { TrackList } from '@renderer/components/TrackList'
+import { TrackToolbar } from '@renderer/components/TrackToolbar'
 import { usePlayer, type QueueSource } from '@renderer/features/player/store'
+import { useTrackSort } from '@renderer/features/tracks/useTrackSort'
 import { cn } from '@renderer/lib/cn'
 import { collectionPath, isPlayable, mergeTracks, pickThumbnail } from '@renderer/lib/media'
+import { filterTracks } from '@renderer/lib/trackFilter'
 
 interface CollectionPageProps {
   kind: CollectionKind
@@ -70,6 +73,10 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const [failedCovers, setFailedCovers] = useState<Set<string>>(() => new Set())
   const [extraTracks, setExtraTracks] = useState<ExtraTrackState | null>(null)
   const [loadMoreError, setLoadMoreError] = useState(false)
+  const [query, setQuery] = useState('')
+  const [bulkLoading, setBulkLoading] = useState(false)
+  const bulkRequest = useRef(0)
+  const bulkLoadingRef = useRef(false)
   const collectionKey = `${kind}:${id ?? ''}`
 
   const { data, isLoading, isError, refetch } = useQuery({
@@ -98,10 +105,87 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
 
   useEffect(() => {
     document.querySelector('main')?.scrollTo({ top: 0 })
-    setFailedCovers(new Set())
-    setExtraTracks(null)
-    setLoadMoreError(false)
   }, [collectionKey])
+
+  const loadedTracks = useMemo(() => {
+    if (!data) return []
+    if (kind === 'playlist' && extraTracks?.key === collectionKey) {
+      return [...data.tracks, ...extraTracks.tracks]
+    }
+    return data.tracks
+  }, [collectionKey, data, extraTracks, kind])
+
+  const hasMore = Boolean(
+    kind === 'playlist' &&
+    (extraTracks?.key === collectionKey ? extraTracks.hasMore : data?.hasMore)
+  )
+
+  const filteredPlaylistTracks = useMemo(
+    () => (kind === 'playlist' ? filterTracks(loadedTracks, query) : []),
+    [kind, loadedTracks, query]
+  )
+
+  const { sortKey, sortedTracks, loadingYears, yearsError, changeSort } = useTrackSort(
+    filteredPlaylistTracks,
+    { initialSort: 'default' }
+  )
+
+  const loadAllTracks = async (): Promise<void> => {
+    if (kind !== 'playlist' || !id || !hasMore || bulkLoadingRef.current) return
+
+    const requestId = bulkRequest.current + 1
+    bulkRequest.current = requestId
+    bulkLoadingRef.current = true
+    setBulkLoading(true)
+    setLoadMoreError(false)
+
+    try {
+      let more = true
+      let pages = 0
+
+      while (more && pages < 200) {
+        pages += 1
+        const page = await window.api.music.collectionMore('playlist', id)
+        if (bulkRequest.current !== requestId) return
+
+        if (page.tracks.length > 0) {
+          appendTracks(page.tracks, { kind: 'playlist', id })
+        }
+
+        setExtraTracks((previous) => ({
+          key: collectionKey,
+          tracks: [...(previous?.key === collectionKey ? previous.tracks : []), ...page.tracks],
+          hasMore: page.hasMore
+        }))
+
+        if (page.tracks.length === 0) {
+          if (page.hasMore) setLoadMoreError(true)
+          break
+        }
+
+        more = page.hasMore
+      }
+
+      if (more) setLoadMoreError(true)
+    } catch {
+      if (bulkRequest.current === requestId) setLoadMoreError(true)
+    } finally {
+      if (bulkRequest.current === requestId) {
+        bulkLoadingRef.current = false
+        setBulkLoading(false)
+      }
+    }
+  }
+
+  const handleQueryChange = (value: string): void => {
+    setQuery(value)
+    if (kind === 'playlist' && value.trim() && hasMore) void loadAllTracks()
+  }
+
+  const handleSortChange = (next: Parameters<typeof changeSort>[0]): void => {
+    changeSort(next)
+    if (kind === 'playlist' && hasMore) void loadAllTracks()
+  }
 
   if (isLoading) return <CollectionSkeleton />
 
@@ -142,23 +226,24 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const coverCandidates = [headerCover, fallbackCover].filter((url): url is string => Boolean(url))
   const cover = coverCandidates.find((url) => !failedCovers.has(url))
   const showCover = Boolean(cover)
-  const loadedTracks =
-    kind === 'playlist' && extraTracks?.key === collectionKey
-      ? [...data.tracks, ...extraTracks.tracks]
-      : data.tracks
   const artistTracks = kind === 'artist' ? (data.allTracks ?? []) : []
-  const queueTracks = artistTracks.length > 0 ? artistTracks : loadedTracks
-  const hasMore =
-    kind === 'playlist' &&
-    (extraTracks?.key === collectionKey ? extraTracks.hasMore : Boolean(data.hasMore))
+  const playlistTracks = kind === 'playlist' ? sortedTracks : []
+  const queueTracks =
+    kind === 'playlist' ? playlistTracks : artistTracks.length > 0 ? artistTracks : loadedTracks
+  const displayTracks =
+    kind === 'playlist' ? sortedTracks : kind === 'artist' ? data.tracks : loadedTracks
   const tracksTitle = kind === 'artist' ? 'Top songs' : kind === 'album' ? 'Tracklist' : 'Songs'
   const details = [data.subtitle, data.meta].filter(Boolean).join(' • ')
   const source: QueueSource | undefined = id ? { kind, id } : undefined
   const totalTracks = data.totalTracks
-  const countLabel =
-    kind === 'playlist' && totalTracks && totalTracks > loadedTracks.length
+  const loadedCountLabel =
+    hasMore && totalTracks && totalTracks > loadedTracks.length
       ? `${loadedTracks.length} of ${totalTracks} tracks`
       : `${loadedTracks.length} ${loadedTracks.length === 1 ? 'track' : 'tracks'}`
+  const countLabel =
+    kind === 'playlist' && query.trim()
+      ? `${sortedTracks.length} of ${loadedTracks.length}${hasMore ? '+' : ''} tracks`
+      : loadedCountLabel
   const topSongsLabel = `${data.tracks.length} ${data.tracks.length === 1 ? 'track' : 'tracks'}`
 
   const playAll = (): void => {
@@ -302,13 +387,32 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
       </div>
 
       <div className="space-y-10 px-8 pt-8">
+        {yearsError && (
+          <p className="-mb-6 text-right text-[11px] text-red-300/90">
+            Could not load release years. Try again.
+          </p>
+        )}
         <TrackList
           title={tracksTitle}
-          tracks={kind === 'artist' ? data.tracks : loadedTracks}
+          tracks={displayTracks}
           countLabel={kind === 'artist' ? topSongsLabel : countLabel}
           onPlay={playCollectionTrack}
+          emptyText={
+            kind === 'playlist' && query.trim()
+              ? 'No tracks match your filter.'
+              : 'No tracks were found here.'
+          }
           action={
-            kind === 'artist' && id && artistTracks.length > 0 ? (
+            kind === 'playlist' ? (
+              <TrackToolbar
+                query={query}
+                onQueryChange={handleQueryChange}
+                sort={sortKey}
+                onSortChange={handleSortChange}
+                sortLoading={loadingYears}
+                disabled={loadedTracks.length === 0}
+              />
+            ) : kind === 'artist' && id && artistTracks.length > 0 ? (
               <button
                 type="button"
                 onClick={() => navigate(`/artist/${id}/songs`)}
@@ -320,21 +424,40 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
             ) : undefined
           }
           footer={
-            hasMore ? (
+            hasMore || bulkLoading ? (
               <div>
-                <button
-                  type="button"
-                  onClick={() => void loadMore.mutate()}
-                  disabled={loadMore.isPending}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink disabled:cursor-wait disabled:opacity-60"
-                >
-                  {loadMore.isPending ? (
+                {bulkLoading ? (
+                  <div className="flex w-full items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted">
                     <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <ChevronDown className="size-4" />
-                  )}
-                  {loadMore.isPending ? 'Loading more tracks…' : 'Load more tracks'}
-                </button>
+                    Loading all tracks… {loadedTracks.length}
+                    {totalTracks ? ` of ${totalTracks}` : ''}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void loadMore.mutate()}
+                      disabled={loadMore.isPending}
+                      className="flex min-w-[160px] flex-1 items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {loadMore.isPending ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <ChevronDown className="size-4" />
+                      )}
+                      {loadMore.isPending ? 'Loading more tracks…' : 'Load more tracks'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void loadAllTracks()}
+                      disabled={loadMore.isPending}
+                      className="flex items-center justify-center gap-2 rounded-xl border border-line/60 bg-surface/30 px-4 py-3 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink disabled:cursor-wait disabled:opacity-60"
+                    >
+                      Load all
+                      {totalTracks ? ` (${totalTracks})` : ''}
+                    </button>
+                  </div>
+                )}
                 {loadMoreError && (
                   <p className="mt-2 text-center text-[11px] text-red-300/90">
                     Could not load more tracks. Try again.

@@ -25,6 +25,7 @@ import { poTokenProvider } from './po-token'
 
 const PLAYBACK_CLIENTS = ['YTMUSIC', 'IOS', 'ANDROID_VR'] as const
 const STREAM_TTL_MS = 5 * 60 * 1000
+const MAX_ARTIST_PAGES = 100
 
 type YtMusic = Innertube['music']
 type YtSearch = Awaited<ReturnType<YtMusic['search']>>
@@ -110,6 +111,26 @@ interface MediaSection {
   title?: unknown
   header?: { title?: unknown }
   contents?: unknown[]
+  continuation?: unknown
+}
+
+interface ContinuationItemNode {
+  type?: string
+  endpoint?: {
+    payload?: {
+      token?: string
+    }
+  }
+}
+
+interface ArtistContinuationResponse {
+  on_response_received_actions?: Array<{
+    contents?: unknown[]
+  }>
+  continuation_contents?: {
+    contents?: unknown[]
+    continuation?: unknown
+  }
 }
 
 interface PlaylistContext {
@@ -746,14 +767,14 @@ class MusicService {
     }
     let tracks = this.applyTrackYears(this.mapTracks(topSongsItems, fallback), sectionAlbumYears)
     let allTracks: MediaItem[] = []
+    let allTracksHasMore = false
 
     try {
       const allSongs = await artist.getAllSongs?.()
       if (allSongs) {
-        allTracks = this.applyTrackYears(
-          this.mapTracks(allSongs.contents, fallback),
-          sectionAlbumYears
-        )
+        const result = await this.loadAllArtistSongs(allSongs, fallback)
+        allTracks = this.applyTrackYears(result.tracks, sectionAlbumYears)
+        allTracksHasMore = result.hasMore
       }
     } catch (error) {
       console.warn(
@@ -789,8 +810,96 @@ class MusicService {
       tracks,
       allTracks: allTracks.length > 0 ? allTracks : undefined,
       sections: this.mapSections(rawSections.filter((section) => section !== topSongs)),
+      hasMore: allTracksHasMore,
       totalTracks: allTracks.length > 0 ? allTracks.length : undefined
     }
+  }
+
+  private async loadAllArtistSongs(
+    shelf: MediaSection,
+    fallback: {
+      album?: AlbumRef
+      artist?: ArtistRef
+      thumbnails?: MediaItem['thumbnails']
+      forceSong?: boolean
+    }
+  ): Promise<{ tracks: MediaItem[]; hasMore: boolean }> {
+    const tracks = this.mapTracks(shelf.contents, fallback)
+    const seen = new Set(tracks.map((track) => track.id))
+    let continuation = this.continuationToken(shelf.contents, shelf.continuation)
+    let pages = 0
+
+    while (continuation && pages < MAX_ARTIST_PAGES) {
+      pages += 1
+
+      let response: ArtistContinuationResponse
+      try {
+        response = await this.fetchArtistContinuation(continuation)
+      } catch (error) {
+        console.warn(
+          `[collection] artist songs continuation failed after ${pages} page(s):`,
+          error instanceof Error ? error.message : error
+        )
+        return { tracks, hasMore: true }
+      }
+
+      const contents = this.artistContinuationContents(response)
+      for (const track of this.mapTracks(contents, fallback)) {
+        if (seen.has(track.id)) continue
+        seen.add(track.id)
+        tracks.push(track)
+      }
+
+      continuation =
+        this.continuationToken(contents, response.continuation_contents?.continuation) ?? undefined
+    }
+
+    return { tracks, hasMore: Boolean(continuation) }
+  }
+
+  private async fetchArtistContinuation(token: string): Promise<ArtistContinuationResponse> {
+    const yt = await this.getYt()
+    let lastError: unknown
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return (await yt.actions.execute('/browse', {
+          client: 'YTMUSIC',
+          continuation: token,
+          parse: true
+        })) as ArtistContinuationResponse
+      } catch (error) {
+        lastError = error
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 700))
+      }
+    }
+
+    throw lastError
+  }
+
+  private artistContinuationContents(response: ArtistContinuationResponse): unknown[] {
+    const fromActions = (response.on_response_received_actions ?? []).flatMap(
+      (action) => action.contents ?? []
+    )
+    const fromContinuation = response.continuation_contents?.contents ?? []
+    return [...fromActions, ...fromContinuation]
+  }
+
+  private continuationToken(
+    contents: unknown[] | undefined,
+    fallback?: unknown
+  ): string | undefined {
+    if (typeof fallback === 'string' && fallback.length > 0) return fallback
+
+    for (const raw of contents ?? []) {
+      const item = raw as ContinuationItemNode
+      if (item.type !== 'ContinuationItem') continue
+
+      const token = item.endpoint?.payload?.token
+      if (typeof token === 'string' && token.length > 0) return token
+    }
+
+    return undefined
   }
 
   private headerField(header: unknown, field: keyof PageHeaderFields): unknown {

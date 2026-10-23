@@ -1,13 +1,14 @@
 import { ArrowLeft, Disc3, Play, Shuffle, UserRound } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { MediaItem } from '@shared/types'
 import { TrackList } from '@renderer/components/TrackList'
-import { TrackSortMenu } from '@renderer/components/TrackSortMenu'
+import { TrackToolbar } from '@renderer/components/TrackToolbar'
 import { usePlayer, type QueueSource } from '@renderer/features/player/store'
+import { useTrackSort } from '@renderer/features/tracks/useTrackSort'
 import { pickThumbnail } from '@renderer/lib/media'
-import { sortTracks, type TrackSortKey } from '@renderer/lib/trackSort'
+import { filterTracks } from '@renderer/lib/trackFilter'
 
 function ArtistSongsSkeleton(): React.JSX.Element {
   return (
@@ -40,14 +41,8 @@ export function ArtistSongsPage(): React.JSX.Element {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const playTrack = usePlayer((state) => state.playTrack)
-  const [sortKey, setSortKey] = useState<TrackSortKey>('popularity')
-  const [appliedSort, setAppliedSort] = useState<TrackSortKey>('popularity')
-  const [albumYears, setAlbumYears] = useState<Record<string, number>>({})
-  const [yearsLoaded, setYearsLoaded] = useState(false)
-  const [loadingYears, setLoadingYears] = useState(false)
-  const [yearsError, setYearsError] = useState(false)
+  const [query, setQuery] = useState('')
   const [failedCovers, setFailedCovers] = useState<Set<string>>(() => new Set())
-  const yearsRequest = useRef(0)
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['collection', 'artist', id],
@@ -61,67 +56,17 @@ export function ArtistSongsPage(): React.JSX.Element {
     return data.allTracks?.length ? data.allTracks : data.tracks
   }, [data])
 
-  const albumIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const track of tracks) {
-      if (!track.year && track.album?.id) ids.add(track.album.id)
+  const filteredTracks = useMemo(() => filterTracks(tracks, query), [tracks, query])
+  const { sortKey, sortedTracks, loadingYears, yearsError, changeSort } = useTrackSort(
+    filteredTracks,
+    {
+      initialSort: 'popularity'
     }
-    return [...ids]
-  }, [tracks])
-
-  const sortedTracks = useMemo(
-    () => sortTracks(tracks, appliedSort, { albumYears }),
-    [tracks, appliedSort, albumYears]
   )
 
   useEffect(() => {
     document.querySelector('main')?.scrollTo({ top: 0 })
-    yearsRequest.current += 1
-    setSortKey('popularity')
-    setAppliedSort('popularity')
-    setAlbumYears({})
-    setYearsLoaded(false)
-    setLoadingYears(false)
-    setYearsError(false)
-    setFailedCovers(new Set())
   }, [id])
-
-  const handleSortChange = (next: TrackSortKey): void => {
-    if (next !== 'newest' && next !== 'oldest') {
-      setSortKey(next)
-      setAppliedSort(next)
-      return
-    }
-
-    if (yearsLoaded || albumIds.length === 0) {
-      setSortKey(next)
-      setAppliedSort(next)
-      return
-    }
-
-    const requestId = yearsRequest.current + 1
-    yearsRequest.current = requestId
-    setSortKey(next)
-    setLoadingYears(true)
-    setYearsError(false)
-
-    void window.api.music
-      .albumYears(albumIds)
-      .then((years) => {
-        if (yearsRequest.current !== requestId) return
-        setAlbumYears((previous) => ({ ...previous, ...years }))
-        setYearsLoaded(true)
-        setAppliedSort(next)
-      })
-      .catch(() => {
-        if (yearsRequest.current !== requestId) return
-        setYearsError(true)
-        setSortKey(appliedSort)
-      })
-      .finally(() => {
-        if (yearsRequest.current === requestId) setLoadingYears(false)
-      })
-  }
 
   if (isLoading) return <ArtistSongsSkeleton />
 
@@ -162,7 +107,9 @@ export function ArtistSongsPage(): React.JSX.Element {
   const coverCandidates = [headerCover, fallbackCover].filter((url): url is string => Boolean(url))
   const cover = coverCandidates.find((url) => !failedCovers.has(url))
   const source: QueueSource | undefined = id ? { kind: 'artist', id } : undefined
-  const countLabel = `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'}`
+  const countLabel = query.trim()
+    ? `${filteredTracks.length} of ${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'}`
+    : `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'}`
 
   const playAll = (): void => {
     if (sortedTracks.length > 0) void playTrack(sortedTracks[0], sortedTracks, source)
@@ -278,11 +225,16 @@ export function ArtistSongsPage(): React.JSX.Element {
           tracks={sortedTracks}
           countLabel={countLabel}
           onPlay={playTrackFromList}
+          emptyText={
+            query.trim() ? 'No songs match your filter.' : 'No songs were found for this artist.'
+          }
           action={
-            <TrackSortMenu
-              value={sortKey}
-              onChange={handleSortChange}
-              loading={loadingYears}
+            <TrackToolbar
+              query={query}
+              onQueryChange={setQuery}
+              sort={sortKey}
+              onSortChange={changeSort}
+              sortLoading={loadingYears}
               disabled={tracks.length === 0}
             />
           }

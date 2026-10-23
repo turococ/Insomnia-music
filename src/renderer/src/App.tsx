@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useParams } from 'react-router-dom'
+import type { CollectionKind } from '@shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { PlayerBar } from './features/player/PlayerBar'
@@ -10,6 +11,16 @@ import { ArtistSongsPage } from './pages/ArtistSongsPage'
 import { CollectionPage } from './pages/CollectionPage'
 import { SearchPage } from './pages/SearchPage'
 import { SettingsPage } from './pages/SettingsPage'
+
+function CollectionRoute({ kind }: { kind: CollectionKind }): React.JSX.Element {
+  const { id } = useParams<{ id: string }>()
+  return <CollectionPage key={`${kind}:${id ?? ''}`} kind={kind} />
+}
+
+function ArtistSongsRoute(): React.JSX.Element {
+  const { id } = useParams<{ id: string }>()
+  return <ArtistSongsPage key={id ?? ''} />
+}
 
 function App(): React.JSX.Element {
   useEffect(() => {
@@ -29,10 +40,10 @@ function App(): React.JSX.Element {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/search" element={<SearchPage />} />
-              <Route path="/album/:id" element={<CollectionPage kind="album" />} />
-              <Route path="/playlist/:id" element={<CollectionPage kind="playlist" />} />
-              <Route path="/artist/:id/songs" element={<ArtistSongsPage />} />
-              <Route path="/artist/:id" element={<CollectionPage kind="artist" />} />
+              <Route path="/album/:id" element={<CollectionRoute kind="album" />} />
+              <Route path="/playlist/:id" element={<CollectionRoute kind="playlist" />} />
+              <Route path="/artist/:id/songs" element={<ArtistSongsRoute />} />
+              <Route path="/artist/:id" element={<CollectionRoute kind="artist" />} />
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

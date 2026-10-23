@@ -1,6 +1,7 @@
 import type { MediaItem } from '@shared/types'
 
-export type TrackSortKey = 'popularity' | 'title' | 'artist' | 'album' | 'newest' | 'oldest'
+export type TrackSortKey =
+  'default' | 'popularity' | 'title' | 'artist' | 'album' | 'newest' | 'oldest'
 
 export interface TrackSortOption {
   key: TrackSortKey
@@ -8,6 +9,7 @@ export interface TrackSortOption {
 }
 
 export const TRACK_SORT_OPTIONS: TrackSortOption[] = [
+  { key: 'default', label: 'Default order' },
   { key: 'popularity', label: 'Popularity' },
   { key: 'title', label: 'Title A-Z' },
   { key: 'artist', label: 'Artist A-Z' },
@@ -94,6 +96,9 @@ export function sortTracks(
       let result = 0
 
       switch (key) {
+        case 'default':
+          result = 0
+          break
         case 'popularity':
           result = comparePopularity(left.track, right.track)
           break
