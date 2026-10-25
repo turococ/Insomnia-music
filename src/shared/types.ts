@@ -1,6 +1,8 @@
 export type MediaKind = 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'podcast'
 export type CollectionKind = 'album' | 'playlist' | 'artist'
+export type LibraryListKind = 'playlists' | 'albums' | 'artists'
 export type SearchFilter = 'all' | 'song' | 'album' | 'artist' | 'playlist' | 'video'
+export type AuthMode = 'browser' | 'embedded'
 
 export interface Thumbnail {
   url: string
@@ -68,6 +70,29 @@ export interface CollectionTrackPage {
   hasMore: boolean
 }
 
+export interface LibraryListData {
+  items: MediaItem[]
+  hasMore: boolean
+}
+
+export interface AccountProfile {
+  name: string
+  handle?: string
+  avatarUrl?: string
+  channelId?: string
+}
+
+export interface AuthStatus {
+  authenticated: boolean
+  account?: AccountProfile
+}
+
+export interface AuthEnvironment {
+  browser: {
+    name: string
+  } | null
+}
+
 export type SearchTopActionKind = 'shuffle' | 'mix'
 
 export interface SearchTopAction {
@@ -118,6 +143,16 @@ export interface AppApi {
     albumYears: (ids: string[]) => Promise<Record<string, number>>
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (id: string) => Promise<string | null>
+  }
+  library: {
+    list: (kind: LibraryListKind) => Promise<LibraryListData>
+    more: (kind: LibraryListKind) => Promise<LibraryListData>
+  }
+  auth: {
+    status: () => Promise<AuthStatus>
+    environment: () => Promise<AuthEnvironment>
+    signIn: (mode?: AuthMode) => Promise<AuthStatus>
+    signOut: () => Promise<AuthStatus>
   }
   playback: {
     resolve: (videoId: string) => Promise<PlaybackSource>

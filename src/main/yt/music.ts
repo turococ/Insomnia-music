@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import type { Innertube, Misc } from 'youtubei.js'
 import type {
+  AccountProfile,
   AlbumRef,
   ArtistRef,
   CollectionData,
   CollectionKind,
   CollectionSection,
   CollectionTrackPage,
+  LibraryListData,
+  LibraryListKind,
   MediaItem,
   MediaKind,
   PlaybackSource,
@@ -20,12 +23,23 @@ import type {
   SearchTopActionQueue,
   SearchTopResult
 } from '@shared/types'
+import { authService } from '../auth'
 import { APP_USER_AGENT } from './constants'
 import { poTokenProvider } from './po-token'
 
 const PLAYBACK_CLIENTS = ['YTMUSIC', 'IOS', 'ANDROID_VR'] as const
 const STREAM_TTL_MS = 5 * 60 * 1000
 const MAX_ARTIST_PAGES = 100
+const LIBRARY_BROWSE_IDS: Record<LibraryListKind, string> = {
+  playlists: 'FEmusic_liked_playlists',
+  albums: 'FEmusic_liked_albums',
+  artists: 'FEmusic_library_corpus_track_artists'
+}
+const LIBRARY_ITEM_KINDS: Record<LibraryListKind, MediaKind> = {
+  playlists: 'playlist',
+  albums: 'album',
+  artists: 'artist'
+}
 
 type YtMusic = Innertube['music']
 type YtSearch = Awaited<ReturnType<YtMusic['search']>>
@@ -138,6 +152,31 @@ interface PlaylistContext {
   thumbnails: MediaItem['thumbnails']
 }
 
+interface LibraryBrowseResponse {
+  contents_memo?: Map<string, unknown[]>
+  continuation_contents?: {
+    contents?: unknown[] | null
+    items?: unknown[] | null
+    continuation?: string | null
+  } | null
+}
+
+interface LibraryListContext {
+  continuation?: string
+}
+
+interface AccountItemFields {
+  account_name?: unknown
+  account_photo?: Array<{ url?: string }>
+  channel_handle?: unknown
+  is_selected?: boolean
+  endpoint?: {
+    payload?: {
+      browseId?: string
+    }
+  }
+}
+
 class MusicService {
   private yt: Innertube | null = null
   private initPromise: Promise<Innertube> | null = null
@@ -149,12 +188,15 @@ class MusicService {
   private pendingSearchMore = new Map<string, Promise<SearchMoreResult>>()
   private topActionEndpoints = new Map<string, TopActionEndpoint>()
   private albumYearCache = new Map<string, number>()
+  private accountProfile: AccountProfile | null | undefined
+  private libraryContexts = new Map<LibraryListKind, LibraryListContext>()
+  private pendingLibraryMore = new Map<LibraryListKind, Promise<LibraryListData>>()
 
   async init(): Promise<Innertube> {
     if (this.yt) return this.yt
     if (this.initPromise) return this.initPromise
 
-    this.initPromise = (async () => {
+    const task = (async () => {
       const mod = await import('youtubei.js')
 
       // youtubei.js needs an evaluator to decipher the player's signature.
@@ -163,18 +205,42 @@ class MusicService {
       // recovers automatically. Keep the console clean for now.
       mod.Log.setLevel(mod.Log.Level.NONE)
 
+      const cookie = await authService.cookieHeader()
       const yt = await mod.Innertube.create({
         lang: 'en',
         location: 'US',
         user_agent: APP_USER_AGENT,
-        retrieve_player: true
+        retrieve_player: true,
+        cookie
       })
 
       this.yt = yt
       return yt
     })()
 
+    this.initPromise = task.catch((error) => {
+      this.initPromise = null
+      throw error
+    })
     return this.initPromise
+  }
+
+  async reloadSession(): Promise<void> {
+    this.yt = null
+    this.initPromise = null
+    this.accountProfile = undefined
+    this.sourceCache.clear()
+    this.pendingSources.clear()
+    this.playlistContexts.clear()
+    this.pendingCollectionMore.clear()
+    this.searchContexts.clear()
+    this.pendingSearchMore.clear()
+    this.topActionEndpoints.clear()
+    this.albumYearCache.clear()
+    this.libraryContexts.clear()
+    this.pendingLibraryMore.clear()
+
+    await this.init()
   }
 
   private async getYt(): Promise<Innertube> {
@@ -183,6 +249,203 @@ class MusicService {
 
   private async music(): Promise<YtMusic> {
     return (await this.getYt()).music
+  }
+
+  async isSignedIn(): Promise<boolean> {
+    return (await this.getYt()).session.logged_in
+  }
+
+  async account(): Promise<AccountProfile | null> {
+    if (this.accountProfile !== undefined) return this.accountProfile
+
+    const yt = await this.getYt()
+    if (!yt.session.logged_in) {
+      this.accountProfile = null
+      return null
+    }
+
+    let fallback: AccountProfile | null = null
+
+    try {
+      const items = await yt.account.getInfo(true)
+      for (const item of items) {
+        const profile = this.mapAccountItem(item)
+        if (!profile) continue
+        if ((item as AccountItemFields).is_selected) {
+          this.accountProfile = profile
+          return profile
+        }
+        fallback ??= profile
+      }
+    } catch (error) {
+      console.warn(
+        '[auth] could not load the account switcher:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    if (fallback) {
+      this.accountProfile = fallback
+      return fallback
+    }
+
+    try {
+      const info = await yt.account.getInfo()
+      for (const item of info.contents?.contents ?? []) {
+        const profile = this.mapAccountItem(item)
+        if (!profile) continue
+        if ((item as AccountItemFields).is_selected) {
+          this.accountProfile = profile
+          return profile
+        }
+        fallback ??= profile
+      }
+    } catch (error) {
+      console.warn(
+        '[auth] could not load account details:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    this.accountProfile = fallback
+    return fallback
+  }
+
+  private mapAccountItem(raw: unknown): AccountProfile | null {
+    const item = raw as AccountItemFields
+    const name = this.text(item.account_name)
+    if (!name) return null
+
+    const avatarUrl = item.account_photo?.find((photo) => photo.url)?.url
+    const handle = this.text(item.channel_handle)
+    const browseId = item.endpoint?.payload?.browseId
+
+    return {
+      name,
+      handle,
+      avatarUrl,
+      channelId: browseId?.startsWith('UC') ? browseId : undefined
+    }
+  }
+
+  async libraryList(kind: LibraryListKind): Promise<LibraryListData> {
+    const yt = await this.requireSignedIn()
+    const response = (await yt.actions.execute('/browse', {
+      browseId: LIBRARY_BROWSE_IDS[kind],
+      client: 'YTMUSIC',
+      parse: true
+    })) as unknown as LibraryBrowseResponse
+
+    const result = this.mapLibraryResponse(response, kind)
+    this.libraryContexts.set(kind, { continuation: result.continuation })
+
+    return { items: result.items, hasMore: Boolean(result.continuation) }
+  }
+
+  async libraryMore(kind: LibraryListKind): Promise<LibraryListData> {
+    const pending = this.pendingLibraryMore.get(kind)
+    if (pending) return pending
+
+    const task = this.loadMoreLibrary(kind).finally(() => {
+      this.pendingLibraryMore.delete(kind)
+    })
+    this.pendingLibraryMore.set(kind, task)
+    return task
+  }
+
+  private async loadMoreLibrary(kind: LibraryListKind): Promise<LibraryListData> {
+    const context = this.libraryContexts.get(kind)
+    if (!context?.continuation) return { items: [], hasMore: false }
+
+    const yt = await this.requireSignedIn()
+    const response = (await yt.actions.execute('/browse', {
+      client: 'YTMUSIC',
+      continuation: context.continuation,
+      parse: true
+    })) as unknown as LibraryBrowseResponse
+
+    const result = this.mapLibraryResponse(response, kind)
+    this.libraryContexts.set(kind, { continuation: result.continuation })
+
+    return { items: result.items, hasMore: Boolean(result.continuation) }
+  }
+
+  private async requireSignedIn(): Promise<Innertube> {
+    const yt = await this.getYt()
+    if (!yt.session.logged_in) {
+      throw new Error('Sign in to YouTube Music to view your library.')
+    }
+    return yt
+  }
+
+  private mapLibraryResponse(
+    response: LibraryBrowseResponse,
+    kind: LibraryListKind
+  ): { items: MediaItem[]; continuation?: string } {
+    const memo = response.contents_memo
+    const rawItems: unknown[] = []
+    const seenRaw = new Set<unknown>()
+
+    for (const listType of ['Grid', 'MusicShelf', 'MusicCarouselShelf']) {
+      for (const list of memo?.get(listType) ?? []) {
+        const value = list as { contents?: unknown[] | null; items?: unknown[] | null }
+        for (const item of value.contents ?? value.items ?? []) {
+          if (seenRaw.has(item)) continue
+          seenRaw.add(item)
+          rawItems.push(item)
+        }
+      }
+    }
+
+    if (rawItems.length === 0) {
+      const continuation = response.continuation_contents
+      for (const item of continuation?.contents ?? continuation?.items ?? []) {
+        if (seenRaw.has(item)) continue
+        seenRaw.add(item)
+        rawItems.push(item)
+      }
+    }
+
+    if (rawItems.length === 0 && memo) {
+      for (const itemType of ['MusicTwoRowItem', 'MusicResponsiveListItem']) {
+        for (const item of memo.get(itemType) ?? []) {
+          if (seenRaw.has(item)) continue
+          seenRaw.add(item)
+          rawItems.push(item)
+        }
+      }
+    }
+
+    const expectedKind = LIBRARY_ITEM_KINDS[kind]
+    const seen = new Set<string>()
+    const items: MediaItem[] = []
+
+    for (const raw of rawItems) {
+      const item = this.mapItem(raw)
+      if (!item || item.kind !== expectedKind) continue
+
+      const key = `${item.kind}:${item.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push(item)
+    }
+
+    return { items, continuation: this.libraryContinuation(response) }
+  }
+
+  private libraryContinuation(response: LibraryBrowseResponse): string | undefined {
+    const continuation = response.continuation_contents?.continuation
+    if (typeof continuation === 'string' && continuation.length > 0) return continuation
+
+    const memo = response.contents_memo
+    for (const listType of ['Grid', 'MusicShelf', 'MusicCarouselShelf']) {
+      for (const list of memo?.get(listType) ?? []) {
+        const token = (list as { continuation?: unknown }).continuation
+        if (typeof token === 'string' && token.length > 0) return token
+      }
+    }
+
+    return this.continuationToken(memo?.get('ContinuationItem'))
   }
 
   async home(filter?: string): Promise<HomeData> {
@@ -578,7 +841,55 @@ class MusicService {
         return data
       }
       case 'artist':
+        if (id.startsWith('MPLAU')) return this.mapLibraryArtist(id)
         return this.mapArtist(await music.getArtist(id), id)
+    }
+  }
+
+  private async mapLibraryArtist(id: string): Promise<CollectionData> {
+    const yt = await this.requireSignedIn()
+    const response = (await yt.actions.execute('/browse', {
+      browseId: id,
+      client: 'YTMUSIC',
+      parse: true
+    })) as unknown as LibraryBrowseResponse
+
+    const shelves = response.contents_memo?.get('MusicShelf') ?? []
+    const shelf = shelves[0] as
+      | {
+          contents?: unknown[]
+          bottom_button?: { endpoint?: { payload?: { browseId?: string } } }
+        }
+      | undefined
+    const tracks = (shelf?.contents ?? [])
+      .map((item) => this.mapItem(item))
+      .filter(
+        (item): item is MediaItem =>
+          item !== null && (item.kind === 'song' || item.kind === 'video')
+      )
+
+    const channelId = shelf?.bottom_button?.endpoint?.payload?.browseId
+    const artistName =
+      tracks
+        .flatMap((track) => track.artists)
+        .find((artist) => (channelId ? artist.id === channelId : Boolean(artist.name)))?.name ??
+      tracks[0]?.artists[0]?.name ??
+      'Artist'
+
+    return {
+      id,
+      kind: 'artist',
+      title: artistName,
+      subtitle: `${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'} in your library`,
+      meta: 'From your library',
+      description: 'Songs from this artist in your YouTube Music library.',
+      author: channelId ? { id: channelId, name: artistName } : { name: artistName },
+      thumbnails: [],
+      tracks,
+      allTracks: tracks,
+      sections: [],
+      hasMore: false,
+      totalTracks: tracks.length
     }
   }
 
@@ -714,7 +1025,8 @@ class MusicService {
 
   private async mapPlaylist(playlist: PlaylistPage, id: string): Promise<CollectionData> {
     const header = playlist.header
-    const title = this.text(this.headerField(header, 'title')) ?? 'Playlist'
+    const title =
+      this.text(this.headerField(header, 'title')) ?? (id === 'LM' ? 'Liked Music' : 'Playlist')
     const thumbnails = this.headerThumbnails(header)
     const author = this.headerAuthor(header)
     const meta = this.text(this.headerField(header, 'second_subtitle'))
@@ -1229,6 +1541,7 @@ class MusicService {
       authors?: Array<{ channel_id?: string; name: string }>
       author?: { channel_id?: string; name: string }
       album?: { id?: string; name: string }
+      endpoint?: { payload?: { browseId?: string } }
       flex_columns?: Array<{
         title?: {
           runs?: Array<{
@@ -1243,12 +1556,13 @@ class MusicService {
       return null
     }
 
-    const kind = item.item_type as MediaKind | undefined
+    const kind =
+      item.item_type === 'library_artist' ? 'artist' : (item.item_type as MediaKind | undefined)
     if (!kind || !['song', 'video', 'album', 'playlist', 'artist', 'podcast'].includes(kind)) {
       return null
     }
 
-    const id = item.id
+    const id = item.id ?? (kind === 'artist' ? item.endpoint?.payload?.browseId : undefined)
     const title = this.text(item.title) ?? item.name ?? ''
     if (!id || !title) return null
 

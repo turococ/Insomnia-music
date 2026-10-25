@@ -1,5 +1,17 @@
-import { Headphones, Home, Library, Search, Settings, Sparkles } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import {
+  ChevronRight,
+  Headphones,
+  Home,
+  Library,
+  Loader2,
+  LogOut,
+  Search,
+  Settings,
+  Sparkles,
+  UserRound
+} from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { useAuth } from '@renderer/features/auth/context'
 import { cn } from '@renderer/lib/cn'
 
 const navigation = [
@@ -10,6 +22,12 @@ const navigation = [
 ]
 
 export function Sidebar(): React.JSX.Element {
+  const navigate = useNavigate()
+  const { status, isLoading, isPending, pendingMode, signIn, signOut } = useAuth()
+  const account = status?.account
+  const authenticated = Boolean(status?.authenticated)
+  const pendingLabel = pendingMode === 'browser' ? 'Waiting for browser…' : 'Waiting for sign-in…'
+
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-line/80 bg-surface/50 px-4 pb-4 pt-6">
       <div className="mb-9 flex items-center gap-3 px-2">
@@ -69,26 +87,77 @@ export function Sidebar(): React.JSX.Element {
             Queue &amp; synced lyrics
           </div>
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
-            Library &amp; account sync
-          </div>
-          <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
             Offline downloads
           </div>
+          <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">Equalizer</div>
         </div>
       </div>
 
-      <div className="mt-auto rounded-2xl border border-line/80 bg-gradient-to-br from-surface-2 to-surface p-3.5">
-        <div className="text-[12px] font-medium text-ink">Sign in to YouTube Music</div>
-        <p className="mt-1 text-[11px] leading-relaxed text-faint">
-          Sync your library, playlists and recommendations.
-        </p>
-        <button
-          type="button"
-          className="mt-3 w-full rounded-xl bg-accent px-3 py-2 text-[12px] font-semibold text-accent-ink transition hover:bg-accent-soft"
-        >
-          Connect account
-        </button>
-      </div>
+      {authenticated ? (
+        <div className="mt-auto rounded-2xl border border-line/80 bg-gradient-to-br from-surface-2 to-surface p-3.5">
+          <div className="flex items-center gap-2.5">
+            {account?.avatarUrl ? (
+              <img
+                src={account.avatarUrl}
+                alt=""
+                draggable={false}
+                className="size-9 shrink-0 rounded-full border border-line/60 object-cover"
+              />
+            ) : (
+              <div className="grid size-9 shrink-0 place-items-center rounded-full border border-line/60 bg-surface-3 text-muted">
+                <UserRound className="size-4" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12px] font-medium text-ink">
+                {account?.name ?? 'YouTube Music'}
+              </div>
+              <div className="truncate text-[10px] text-faint">
+                {account?.handle ?? 'Account connected'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              disabled={isPending}
+              aria-label="Sign out of YouTube Music"
+              title="Sign out"
+              className="grid size-7 shrink-0 place-items-center rounded-full text-faint transition hover:bg-surface-3 hover:text-ink disabled:cursor-wait disabled:opacity-50"
+            >
+              {isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <LogOut className="size-3.5" />
+              )}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => navigate('/library')}
+            className="mt-3 flex w-full items-center justify-between rounded-xl border border-line/70 bg-canvas/40 px-3 py-2 text-[11px] font-medium text-muted transition hover:border-accent/30 hover:text-ink"
+          >
+            Open library
+            <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      ) : (
+        <div className="mt-auto rounded-2xl border border-line/80 bg-gradient-to-br from-surface-2 to-surface p-3.5">
+          <div className="text-[12px] font-medium text-ink">Sign in to YouTube Music</div>
+          <p className="mt-1 text-[11px] leading-relaxed text-faint">
+            Sync your library, playlists and recommendations.
+          </p>
+          <button
+            type="button"
+            onClick={() => void signIn()}
+            disabled={isLoading || isPending}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-3 py-2 text-[12px] font-semibold text-accent-ink transition hover:bg-accent-soft disabled:cursor-wait disabled:opacity-60"
+          >
+            {(isLoading || isPending) && <Loader2 className="size-3.5 animate-spin" />}
+            {isPending ? pendingLabel : 'Connect account'}
+          </button>
+        </div>
+      )}
 
       <div className="mt-4 px-2 text-[10px] text-faint">ToneGlass 0.1.0 · unofficial client</div>
     </aside>

@@ -15,6 +15,16 @@ const api: AppApi = {
     track: (id) => ipcRenderer.invoke(IPC.musicTrack, id),
     lyrics: (id) => ipcRenderer.invoke(IPC.musicLyrics, id)
   },
+  library: {
+    list: (kind) => ipcRenderer.invoke(IPC.libraryList, kind),
+    more: (kind) => ipcRenderer.invoke(IPC.libraryMore, kind)
+  },
+  auth: {
+    status: () => ipcRenderer.invoke(IPC.authStatus),
+    environment: () => ipcRenderer.invoke(IPC.authEnvironment),
+    signIn: (mode) => ipcRenderer.invoke(IPC.authSignIn, mode),
+    signOut: () => ipcRenderer.invoke(IPC.authSignOut)
+  },
   playback: {
     resolve: (videoId) => ipcRenderer.invoke(IPC.playbackResolve, videoId)
   }

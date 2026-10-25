@@ -8,5 +8,11 @@ export const IPC = {
   musicAlbumYears: 'music:album:years',
   musicTrack: 'music:track',
   musicLyrics: 'music:lyrics',
+  libraryList: 'library:list',
+  libraryMore: 'library:more',
+  authStatus: 'auth:status',
+  authEnvironment: 'auth:environment',
+  authSignIn: 'auth:sign-in',
+  authSignOut: 'auth:sign-out',
   playbackResolve: 'playback:resolve'
 } as const

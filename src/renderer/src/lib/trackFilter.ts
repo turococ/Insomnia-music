@@ -14,7 +14,13 @@ export function filterTracks(tracks: MediaItem[], query: string): MediaItem[] {
 
   return tracks.filter((track) => {
     const haystack = normalize(
-      [track.title, ...track.artists.map((artist) => artist.name), track.album?.name, track.year]
+      [
+        track.title,
+        track.subtitle,
+        ...track.artists.map((artist) => artist.name),
+        track.album?.name,
+        track.year
+      ]
         .filter(Boolean)
         .join(' ')
     )
