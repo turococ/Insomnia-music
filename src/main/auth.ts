@@ -193,6 +193,40 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<bool
   })
 }
 
+function terminateProcessTree(child: ChildProcess, force = false): void {
+  if (!child.pid) return
+
+  if (process.platform === 'win32') {
+    try {
+      const killer = spawn(
+        'taskkill',
+        ['/pid', String(child.pid), '/T', ...(force ? ['/F'] : [])],
+        { stdio: 'ignore', windowsHide: true }
+      )
+      killer.once('error', () => {
+        try {
+          child.kill()
+        } catch {
+          // The browser may already be gone.
+        }
+      })
+    } catch {
+      try {
+        child.kill()
+      } catch {
+        // The browser may already be gone.
+      }
+    }
+    return
+  }
+
+  try {
+    child.kill(force ? 'SIGKILL' : 'SIGTERM')
+  } catch {
+    // The browser may already be gone.
+  }
+}
+
 function trackBrowserError(child: ChildProcess): { error: Error | null } {
   const status: { error: Error | null } = { error: null }
   child.once('error', (error) => {
@@ -820,13 +854,7 @@ class AuthService {
 
     const child = this.browserProcess
     this.browserProcess = null
-    if (child?.pid && !hasExited(child)) {
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // The browser may already be gone.
-      }
-    }
+    if (child?.pid && !hasExited(child)) terminateProcessTree(child)
 
     const profile = this.browserProfileDir
     this.browserProfileDir = null
@@ -1179,18 +1207,10 @@ class AuthService {
 
     if (!child?.pid || hasExited(child)) return
 
-    try {
-      child.kill('SIGTERM')
-    } catch {
-      // The browser may already be gone.
-    }
+    terminateProcessTree(child)
 
     if (!(await waitForExit(child, BROWSER_CLOSE_TIMEOUT_MS))) {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // The browser may already be gone.
-      }
+      terminateProcessTree(child, true)
       await waitForExit(child, 1000)
     }
   }
