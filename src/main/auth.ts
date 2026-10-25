@@ -1,8 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { BrowserWindow, session, shell, type Session } from 'electron'
 import type { AuthEnvironment, AuthMode } from '@shared/types'
 
@@ -12,6 +15,10 @@ const SIGN_IN_URL =
   'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F&hl=en'
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
 const COOKIE_POLL_MS = 800
+const BROWSER_COOKIE_DB_POLL_MS = 500
+const BROWSER_LOGIN_SETTLE_MS = 500
+const BROWSER_CONTROLLER_START_TIMEOUT_MS = 20_000
+const BROWSER_HEARTBEAT_TIMEOUT_MS = 5_000
 const BROWSER_START_TIMEOUT_MS = 20_000
 const BROWSER_TARGET_TIMEOUT_MS = 15_000
 const BROWSER_CLOSE_TIMEOUT_MS = 3_000
@@ -71,13 +78,12 @@ interface ImportableCookie extends CdpCookie {
 }
 
 interface CdpTarget {
-  id?: string
   type?: string
   url?: string
   webSocketDebuggerUrl?: string
 }
 
-interface SignInTarget extends CdpTarget {
+interface PageTarget extends CdpTarget {
   webSocketDebuggerUrl: string
 }
 
@@ -160,20 +166,6 @@ function mapSameSite(
   }
 }
 
-function isSignInUrl(url: string | undefined): boolean {
-  if (!url) return false
-  try {
-    const host = new URL(url).hostname
-    return host === 'google.com' || host.endsWith('.google.com') || isYoutubeHost(host)
-  } catch {
-    return false
-  }
-}
-
-function isYoutubeHost(host: string): boolean {
-  return host === 'youtube.com' || host.endsWith('.youtube.com')
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -199,6 +191,65 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<bool
 
     child.once('exit', onExit)
   })
+}
+
+function trackBrowserError(child: ChildProcess): { error: Error | null } {
+  const status: { error: Error | null } = { error: null }
+  child.once('error', (error) => {
+    status.error = error
+  })
+  return status
+}
+
+function profileHasAuthCookies(profileDir: string): boolean {
+  const candidates = [
+    join(profileDir, 'Default', 'Cookies'),
+    join(profileDir, 'Default', 'Network', 'Cookies')
+  ]
+
+  for (const cookiesPath of candidates) {
+    if (!existsSync(cookiesPath)) continue
+
+    let database: DatabaseSync | null = null
+    try {
+      database = new DatabaseSync(cookiesPath, { readOnly: true })
+      database.exec('PRAGMA busy_timeout = 1000')
+      const rows = database
+        .prepare(
+          "SELECT name FROM cookies WHERE host_key = 'youtube.com' OR host_key LIKE '%.youtube.com'"
+        )
+        .all() as Array<{ name?: unknown }>
+
+      if (rows.some((row) => typeof row.name === 'string' && AUTH_COOKIE_NAMES.has(row.name))) {
+        return true
+      }
+    } catch {
+      // Chrome may be writing to the cookie database. The next poll retries.
+    } finally {
+      try {
+        database?.close()
+      } catch {
+        // The database may already be closed.
+      }
+    }
+  }
+
+  return false
+}
+
+async function clearBrowserSingletonFiles(profileDir: string): Promise<void> {
+  for (const name of [
+    'SingletonLock',
+    'SingletonSocket',
+    'SingletonCookie',
+    'DevToolsActivePort'
+  ]) {
+    try {
+      await rm(join(profileDir, name), { force: true })
+    } catch {
+      // Chrome may have already removed the file.
+    }
+  }
 }
 
 function browserCandidates(): BrowserCandidate[] {
@@ -250,6 +301,254 @@ function browserCandidates(): BrowserCandidate[] {
 
 function findBrowser(): BrowserCandidate | null {
   return browserCandidates().find((candidate) => existsSync(candidate.path)) ?? null
+}
+
+interface BrowserSignInState {
+  canceled: boolean
+  lastHeartbeat: number
+}
+
+function scriptJson(value: string): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c')
+}
+
+class BrowserSignInServer {
+  private readonly token = randomBytes(24).toString('hex')
+  private port = 0
+  private closed = false
+  private readonly server: Server
+  private readonly signInUrl: string
+  readonly state: BrowserSignInState = { canceled: false, lastHeartbeat: 0 }
+
+  private constructor(server: Server, signInUrl: string) {
+    this.server = server
+    this.signInUrl = signInUrl
+  }
+
+  static async start(signInUrl: string): Promise<BrowserSignInServer> {
+    const controller = new BrowserSignInServer(createServer(), signInUrl)
+    controller.server.on('request', (request, response) => {
+      controller.handleRequest(request, response)
+    })
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error): void => {
+          controller.server.off('listening', onListening)
+          reject(error)
+        }
+        const onListening = (): void => {
+          controller.server.off('error', onError)
+          resolve()
+        }
+
+        controller.server.once('error', onError)
+        controller.server.once('listening', onListening)
+        controller.server.listen(0, '127.0.0.1')
+      })
+    } catch (error) {
+      controller.server.close()
+      throw error
+    }
+
+    const address = controller.server.address()
+    if (!address || typeof address === 'string') {
+      controller.server.close()
+      throw new Error('Could not start the browser sign-in helper.')
+    }
+
+    controller.port = address.port
+    return controller
+  }
+
+  get url(): string {
+    return `http://127.0.0.1:${this.port}/auth/${this.token}`
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+
+    await new Promise<void>((resolve) => {
+      this.server.close(() => resolve())
+      this.server.closeAllConnections()
+    })
+  }
+
+  private handleRequest(request: IncomingMessage, response: ServerResponse): void {
+    const base = `/auth/${this.token}`
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    const method = request.method ?? 'GET'
+
+    if (url.pathname === '/favicon.ico') {
+      response.writeHead(204).end()
+      return
+    }
+
+    if (method === 'GET' && url.pathname === base) {
+      response.writeHead(200, {
+        'cache-control': 'no-store',
+        'content-type': 'text/html; charset=utf-8',
+        'content-security-policy':
+          "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'",
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff'
+      })
+      response.end(this.pageHtml())
+      return
+    }
+
+    if (method === 'POST' && url.pathname === `${base}/heartbeat`) {
+      this.state.lastHeartbeat = Date.now()
+      response.writeHead(204).end()
+      return
+    }
+
+    if (method === 'POST' && url.pathname === `${base}/cancel`) {
+      this.state.canceled = true
+      response.writeHead(204).end()
+      return
+    }
+
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found')
+  }
+
+  private pageHtml(): string {
+    const base = `/auth/${this.token}`
+    const heartbeatUrl = `${base}/heartbeat`
+    const cancelUrl = `${base}/cancel`
+
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>ToneGlass sign-in</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0c0d10;
+        color: #f4f4f5;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main { width: min(100%, 420px); padding: 42px 34px; text-align: center; }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: #b8a6ff;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .mark {
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        background: #9a7cff;
+        box-shadow: 0 0 20px rgba(154, 124, 255, 0.75);
+      }
+      h1 { margin: 18px 0 0; font-size: 22px; letter-spacing: -0.02em; }
+      p { margin: 12px 0 0; color: #9b9ca6; font-size: 13px; line-height: 1.6; }
+      button {
+        margin-top: 22px;
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 20px;
+        background: #9a7cff;
+        color: #100b20;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:hover { background: #ad95ff; }
+      .hint { margin-top: 22px; color: #5e606b; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand"><span class="mark"></span>ToneGlass</div>
+      <h1>Connect YouTube Music</h1>
+      <p id="status">Opening the Google sign-in window…</p>
+      <button id="open" type="button" hidden>Open Google sign-in</button>
+      <p class="hint">Closing the Google window cancels sign-in.</p>
+    </main>
+    <script>
+      const googleUrl = ${scriptJson(this.signInUrl)}
+      const heartbeatUrl = ${scriptJson(heartbeatUrl)}
+      const cancelUrl = ${scriptJson(cancelUrl)}
+      const status = document.getElementById('status')
+      const openButton = document.getElementById('open')
+      let popup = null
+      let popupWatcher = null
+      let canceled = false
+
+      function heartbeat() {
+        fetch(heartbeatUrl, { method: 'POST', keepalive: true }).catch(() => undefined)
+      }
+
+      heartbeat()
+      window.setInterval(heartbeat, 1000)
+
+      function cancel() {
+        if (canceled) return
+        canceled = true
+        if (popupWatcher !== null) window.clearInterval(popupWatcher)
+        status.textContent = 'Sign-in canceled. You can close this window.'
+        openButton.hidden = true
+        navigator.sendBeacon(cancelUrl, 'closed')
+      }
+
+      function watchPopup() {
+        if (!popup) return
+        popupWatcher = window.setInterval(() => {
+          if (popup && popup.closed) cancel()
+        }, 500)
+      }
+
+      function launchGoogle() {
+        if (popup && !popup.closed) {
+          popup.focus()
+          return
+        }
+
+        popup = window.open(
+          googleUrl,
+          'toneglass-google-sign-in',
+          'popup=yes,width=560,height=760'
+        )
+
+        if (!popup) {
+          status.textContent = 'Allow the Google sign-in window to continue.'
+          openButton.hidden = false
+          return
+        }
+
+        status.textContent = 'Complete sign-in in the Google window.'
+        openButton.hidden = true
+        window.setTimeout(() => {
+          try { popup.focus() } catch {}
+        }, 300)
+        watchPopup()
+      }
+
+      openButton.addEventListener('click', launchGoogle)
+      window.addEventListener('load', () => window.setTimeout(launchGoogle, 250))
+      window.addEventListener('pagehide', () => {
+        if (!canceled) navigator.sendBeacon(cancelUrl, 'closed')
+      })
+    </script>
+  </body>
+</html>`
+  }
 }
 
 class CdpClient {
@@ -403,11 +702,11 @@ async function waitForDevToolsPort(
   throw new Error('The browser did not start in time.')
 }
 
-async function waitForSignInTarget(
+async function waitForPageTarget(
   port: number,
   child: ChildProcess,
   spawnError: () => Error | null
-): Promise<SignInTarget> {
+): Promise<PageTarget> {
   const deadline = Date.now() + BROWSER_TARGET_TIMEOUT_MS
 
   while (Date.now() < deadline) {
@@ -420,13 +719,10 @@ async function waitForSignInTarget(
       if (response.ok) {
         const data = (await response.json()) as unknown
         if (Array.isArray(data)) {
-          const targets = (data as CdpTarget[]).filter(
-            (target) => target.type === 'page' && typeof target.webSocketDebuggerUrl === 'string'
+          const target = (data as CdpTarget[]).find(
+            (candidate) =>
+              candidate.type === 'page' && typeof candidate.webSocketDebuggerUrl === 'string'
           )
-          const target =
-            targets.find((candidate) => isSignInUrl(candidate.url)) ??
-            targets.find((candidate) => candidate.url?.startsWith('http')) ??
-            targets[0]
 
           if (target?.webSocketDebuggerUrl) {
             return { ...target, webSocketDebuggerUrl: target.webSocketDebuggerUrl }
@@ -440,26 +736,7 @@ async function waitForSignInTarget(
     await delay(250)
   }
 
-  throw new Error('Could not connect to the browser sign-in window.')
-}
-
-async function pageTargetExists(port: number, targetId: string | undefined): Promise<boolean> {
-  if (!targetId) return true
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
-      signal: AbortSignal.timeout(2000)
-    })
-    if (!response.ok) return true
-
-    const data = (await response.json()) as unknown
-    if (!Array.isArray(data)) return true
-
-    return (data as CdpTarget[]).some((target) => target.id === targetId && target.type === 'page')
-  } catch {
-    // A transient failure should not abort a perfectly valid sign-in.
-    return true
-  }
+  throw new Error('Could not connect to the browser session.')
 }
 
 /**
@@ -473,6 +750,7 @@ class AuthService {
   private signInTask: Promise<boolean> | null = null
   private browserProcess: ChildProcess | null = null
   private browserProfileDir: string | null = null
+  private browserSignInServer: BrowserSignInServer | null = null
 
   environment(): AuthEnvironment {
     const browser = findBrowser()
@@ -536,6 +814,10 @@ class AuthService {
     if (this.loginWindow && !this.loginWindow.isDestroyed()) this.loginWindow.close()
     this.loginWindow = null
 
+    const controller = this.browserSignInServer
+    this.browserSignInServer = null
+    if (controller) void controller.close()
+
     const child = this.browserProcess
     this.browserProcess = null
     if (child?.pid && !hasExited(child)) {
@@ -551,104 +833,158 @@ class AuthService {
     if (profile) void this.removeBrowserProfile(profile)
   }
 
-  private async signInInBrowser(browser: BrowserCandidate): Promise<boolean> {
-    const profileDir = await mkdtemp(join(tmpdir(), 'toneglass-auth-'))
-    console.info(`[auth] starting ${browser.name} with a temporary profile`)
+  private launchBrowser(
+    browser: BrowserCandidate,
+    profileDir: string,
+    args: string[]
+  ): ChildProcess {
+    const child = spawn(browser.path, [`--user-data-dir=${profileDir}`, ...args], {
+      stdio: 'ignore',
+      detached: false
+    })
+    this.browserProcess = child
+    this.browserProfileDir = profileDir
+    return child
+  }
 
+  private async waitForBrowserSignIn(
+    child: ChildProcess,
+    profileDir: string,
+    controller: BrowserSignInServer,
+    browserStatus: { error: Error | null }
+  ): Promise<boolean> {
+    const deadline = Date.now() + LOGIN_TIMEOUT_MS
+    const startedAt = Date.now()
+
+    while (Date.now() < deadline) {
+      if (browserStatus.error) {
+        throw new Error(`Could not start the browser: ${browserStatus.error.message}`)
+      }
+
+      // Check the cookie database before cancellation so a sign-in that
+      // completes just as the Google window closes is still imported.
+      if (profileHasAuthCookies(profileDir)) {
+        await delay(BROWSER_LOGIN_SETTLE_MS)
+        return true
+      }
+
+      if (controller.state.canceled) {
+        console.info('[auth] browser sign-in canceled')
+        return false
+      }
+
+      if (hasExited(child)) return false
+
+      if (controller.state.lastHeartbeat > 0) {
+        if (Date.now() - controller.state.lastHeartbeat > BROWSER_HEARTBEAT_TIMEOUT_MS) {
+          console.info('[auth] browser window closed; sign-in canceled')
+          return false
+        }
+      } else if (Date.now() - startedAt > BROWSER_CONTROLLER_START_TIMEOUT_MS) {
+        throw new Error('Could not open the browser sign-in page.')
+      }
+
+      await delay(BROWSER_COOKIE_DB_POLL_MS)
+    }
+
+    throw new Error('Browser sign-in timed out. Please try again.')
+  }
+
+  private async readCookiesFromProfile(
+    browser: BrowserCandidate,
+    profileDir: string
+  ): Promise<CdpCookie[]> {
     let child: ChildProcess
     try {
-      child = spawn(
-        browser.path,
-        [
-          `--user-data-dir=${profileDir}`,
-          '--remote-debugging-port=0',
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-sync',
-          '--new-window',
-          SIGN_IN_URL
-        ],
-        {
-          stdio: 'ignore',
-          detached: false
-        }
-      )
+      child = this.launchBrowser(browser, profileDir, [
+        '--remote-debugging-port=0',
+        '--headless=new',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-sync',
+        'about:blank'
+      ])
     } catch (error) {
-      await this.removeBrowserProfile(profileDir)
       throw new Error(
-        `Could not start ${browser.name}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        `Could not read the browser session: ${error instanceof Error ? error.message : 'unknown error'}`,
         { cause: error }
       )
     }
 
-    this.browserProcess = child
-    this.browserProfileDir = profileDir
-
-    const browserStatus: { error: Error | null } = { error: null }
-    child.once('error', (error) => {
-      browserStatus.error = error
-    })
-
+    const browserStatus = trackBrowserError(child)
     let cdp: CdpClient | null = null
+
     try {
       const port = await waitForDevToolsPort(profileDir, child, () => browserStatus.error)
-      const target = await waitForSignInTarget(port, child, () => browserStatus.error)
-
+      const target = await waitForPageTarget(port, child, () => browserStatus.error)
       cdp = await CdpClient.connect(target.webSocketDebuggerUrl)
-      if (!isSignInUrl(target.url)) {
-        await cdp.call('Page.navigate', { url: SIGN_IN_URL }).catch(() => undefined)
-      }
-      // getAllCookies works without the Network domain, but enabling it makes
-      // Chrome keep the target session in the same mode as a normal page.
-      await cdp.call('Network.enable').catch(() => undefined)
-
-      const deadline = Date.now() + LOGIN_TIMEOUT_MS
-      let pollWarningShown = false
-
-      while (Date.now() < deadline) {
-        if (browserStatus.error) {
-          throw new Error(`Could not start the browser: ${browserStatus.error.message}`)
-        }
-        if (hasExited(child) || cdp.isClosed || !(await pageTargetExists(port, target.id))) {
-          // Closing the browser window ends the CDP page session even when
-          // Chrome keeps running in the background on macOS. Treat that as a
-          // cancellation instead of leaving the app waiting for ten minutes.
-          console.info('[auth] browser window closed; sign-in canceled')
-          return false
-        }
-
-        try {
-          const result = await cdp.call<{ cookies?: CdpCookie[] }>(
-            'Network.getAllCookies',
-            {},
-            4000
-          )
-          const youtubeCookies = (result.cookies ?? []).filter((cookie) => isYoutubeCookie(cookie))
-
-          if (hasAuthCookies(youtubeCookies)) {
-            await this.importYoutubeCookies(youtubeCookies)
-            return true
-          }
-        } catch (error) {
-          if (hasExited(child) || cdp.isClosed || !(await pageTargetExists(port, target.id))) {
-            console.info('[auth] browser window closed; sign-in canceled')
-            return false
-          }
-          if (!pollWarningShown) {
-            pollWarningShown = true
-            console.warn(
-              '[auth] could not read cookies from the browser:',
-              error instanceof Error ? error.message : error
-            )
-          }
-        }
-
-        await delay(COOKIE_POLL_MS)
-      }
-
-      throw new Error('Browser sign-in timed out. Please try again.')
+      const result = await cdp.call<{ cookies?: CdpCookie[] }>('Network.getAllCookies')
+      return (result.cookies ?? []).filter((cookie) => isYoutubeCookie(cookie))
     } finally {
       cdp?.close()
+    }
+  }
+
+  private async signInInBrowser(browser: BrowserCandidate): Promise<boolean> {
+    // Google rejects browsers started with remote debugging enabled ("This
+    // browser or app may not be secure"). The sign-in phase therefore uses a
+    // normal browser and watches the profile's cookie database. Only after the
+    // session exists is the profile reopened headlessly with CDP to read it.
+    const profileDir = await mkdtemp(join(tmpdir(), 'toneglass-auth-'))
+    this.browserProfileDir = profileDir
+
+    let controller: BrowserSignInServer
+    try {
+      controller = await BrowserSignInServer.start(SIGN_IN_URL)
+    } catch (error) {
+      this.browserProfileDir = null
+      await this.removeBrowserProfile(profileDir)
+      throw new Error('Could not prepare browser sign-in.', { cause: error })
+    }
+
+    this.browserSignInServer = controller
+
+    try {
+      console.info(`[auth] starting ${browser.name} with a temporary profile`)
+
+      let child: ChildProcess
+      try {
+        child = this.launchBrowser(browser, profileDir, [
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-sync',
+          '--disable-popup-blocking',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--window-size=520,460',
+          `--app=${controller.url}`
+        ])
+      } catch (error) {
+        throw new Error(
+          `Could not start ${browser.name}: ${error instanceof Error ? error.message : 'unknown error'}`,
+          { cause: error }
+        )
+      }
+
+      const browserStatus = trackBrowserError(child)
+      const signedIn = await this.waitForBrowserSignIn(child, profileDir, controller, browserStatus)
+      if (!signedIn) return false
+
+      console.info('[auth] browser sign-in complete; importing cookies')
+      await this.stopBrowserProcess()
+      await clearBrowserSingletonFiles(profileDir)
+
+      const cookies = await this.readCookiesFromProfile(browser, profileDir)
+      if (!hasAuthCookies(cookies)) {
+        throw new Error('The browser session did not include YouTube Music sign-in cookies.')
+      }
+
+      await this.importYoutubeCookies(cookies)
+      return true
+    } finally {
+      await controller.close()
+      if (this.browserSignInServer === controller) this.browserSignInServer = null
       await this.stopBrowser()
     }
   }
@@ -821,6 +1157,10 @@ class AuthService {
   private async cancelSignIn(): Promise<void> {
     if (this.loginWindow && !this.loginWindow.isDestroyed()) this.loginWindow.close()
     this.loginWindow = null
+
+    const controller = this.browserSignInServer
+    this.browserSignInServer = null
+    if (controller) await controller.close()
     await this.stopBrowser()
   }
 
@@ -833,29 +1173,33 @@ class AuthService {
     await ses.clearCache()
   }
 
-  private async stopBrowser(): Promise<void> {
+  private async stopBrowserProcess(): Promise<void> {
     const child = this.browserProcess
-    const profile = this.browserProfileDir
     this.browserProcess = null
-    this.browserProfileDir = null
 
-    if (child?.pid && !hasExited(child)) {
+    if (!child?.pid || hasExited(child)) return
+
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // The browser may already be gone.
+    }
+
+    if (!(await waitForExit(child, BROWSER_CLOSE_TIMEOUT_MS))) {
       try {
-        child.kill('SIGTERM')
+        child.kill('SIGKILL')
       } catch {
         // The browser may already be gone.
       }
-
-      if (!(await waitForExit(child, BROWSER_CLOSE_TIMEOUT_MS))) {
-        try {
-          child.kill('SIGKILL')
-        } catch {
-          // The browser may already be gone.
-        }
-        await waitForExit(child, 1000)
-      }
+      await waitForExit(child, 1000)
     }
+  }
 
+  private async stopBrowser(): Promise<void> {
+    const profile = this.browserProfileDir
+    this.browserProfileDir = null
+
+    await this.stopBrowserProcess()
     if (profile) await this.removeBrowserProfile(profile)
   }
 
