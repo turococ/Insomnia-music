@@ -71,6 +71,7 @@ interface ImportableCookie extends CdpCookie {
 }
 
 interface CdpTarget {
+  id?: string
   type?: string
   url?: string
   webSocketDebuggerUrl?: string
@@ -258,8 +259,15 @@ class CdpClient {
 
   private constructor(private readonly socket: BrowserSocket) {
     socket.onmessage = (event) => this.handleMessage(event.data)
-    socket.onclose = () => this.failPending(new Error('The browser connection closed.'))
+    socket.onclose = () => {
+      this.closed = true
+      this.failPending(new Error('The browser connection closed.'))
+    }
     socket.onerror = () => undefined
+  }
+
+  get isClosed(): boolean {
+    return this.closed
   }
 
   static async connect(url: string): Promise<CdpClient> {
@@ -295,7 +303,7 @@ class CdpClient {
     return new CdpClient(socket)
   }
 
-  call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  call<T>(method: string, params: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<T> {
     if (this.closed) return Promise.reject(new Error('The browser connection is closed.'))
 
     const id = ++this.nextId
@@ -303,7 +311,7 @@ class CdpClient {
       const timer = setTimeout(() => {
         this.pending.delete(id)
         reject(new Error(`The browser did not answer the ${method} request.`))
-      }, 10_000)
+      }, timeoutMs)
 
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -322,12 +330,14 @@ class CdpClient {
   }
 
   close(): void {
-    if (this.closed) return
+    const alreadyClosed = this.closed
     this.closed = true
     this.failPending(new Error('The browser connection closed.'))
     this.socket.onclose = null
     this.socket.onmessage = null
     this.socket.onerror = null
+    if (alreadyClosed) return
+
     try {
       this.socket.close()
     } catch {
@@ -431,6 +441,25 @@ async function waitForSignInTarget(
   }
 
   throw new Error('Could not connect to the browser sign-in window.')
+}
+
+async function pageTargetExists(port: number, targetId: string | undefined): Promise<boolean> {
+  if (!targetId) return true
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(2000)
+    })
+    if (!response.ok) return true
+
+    const data = (await response.json()) as unknown
+    if (!Array.isArray(data)) return true
+
+    return (data as CdpTarget[]).some((target) => target.id === targetId && target.type === 'page')
+  } catch {
+    // A transient failure should not abort a perfectly valid sign-in.
+    return true
+  }
 }
 
 /**
@@ -580,10 +609,20 @@ class AuthService {
         if (browserStatus.error) {
           throw new Error(`Could not start the browser: ${browserStatus.error.message}`)
         }
-        if (hasExited(child)) return false
+        if (hasExited(child) || cdp.isClosed || !(await pageTargetExists(port, target.id))) {
+          // Closing the browser window ends the CDP page session even when
+          // Chrome keeps running in the background on macOS. Treat that as a
+          // cancellation instead of leaving the app waiting for ten minutes.
+          console.info('[auth] browser window closed; sign-in canceled')
+          return false
+        }
 
         try {
-          const result = await cdp.call<{ cookies?: CdpCookie[] }>('Network.getAllCookies')
+          const result = await cdp.call<{ cookies?: CdpCookie[] }>(
+            'Network.getAllCookies',
+            {},
+            4000
+          )
           const youtubeCookies = (result.cookies ?? []).filter((cookie) => isYoutubeCookie(cookie))
 
           if (hasAuthCookies(youtubeCookies)) {
@@ -591,7 +630,10 @@ class AuthService {
             return true
           }
         } catch (error) {
-          if (hasExited(child)) return false
+          if (hasExited(child) || cdp.isClosed || !(await pageTargetExists(port, target.id))) {
+            console.info('[auth] browser window closed; sign-in canceled')
+            return false
+          }
           if (!pollWarningShown) {
             pollWarningShown = true
             console.warn(
