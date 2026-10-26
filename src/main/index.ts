@@ -2,7 +2,6 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { authService } from './auth'
 import { registerIpc } from './ipc'
 import { musicService } from './yt/music'
 
@@ -65,10 +64,6 @@ app.whenReady().then(() => {
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
-})
-
-app.on('before-quit', () => {
-  authService.shutdown()
 })
 
 app.on('window-all-closed', () => {

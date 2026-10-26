@@ -12,7 +12,6 @@ export const IPC = {
   libraryMore: 'library:more',
   authStatus: 'auth:status',
   authSignIn: 'auth:sign-in',
-  authSignInBrowser: 'auth:sign-in:browser',
   authCancel: 'auth:cancel',
   authSignOut: 'auth:sign-out',
   playbackResolve: 'playback:resolve'

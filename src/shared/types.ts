@@ -152,7 +152,6 @@ export interface AppApi {
   auth: {
     status: () => Promise<AuthStatus>
     signIn: () => Promise<SignInResult>
-    signInWithBrowser: () => Promise<SignInResult>
     cancelSignIn: () => Promise<void>
     signOut: () => Promise<AuthStatus>
   }

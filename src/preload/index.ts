@@ -22,7 +22,6 @@ const api: AppApi = {
   auth: {
     status: () => ipcRenderer.invoke(IPC.authStatus),
     signIn: () => ipcRenderer.invoke(IPC.authSignIn),
-    signInWithBrowser: () => ipcRenderer.invoke(IPC.authSignInBrowser),
     cancelSignIn: () => ipcRenderer.invoke(IPC.authCancel),
     signOut: () => ipcRenderer.invoke(IPC.authSignOut)
   },

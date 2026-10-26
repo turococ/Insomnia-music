@@ -7,7 +7,6 @@ export interface AuthContextValue {
   isPending: boolean
   error: string | null
   signIn: () => Promise<void>
-  signInWithBrowser: () => Promise<void>
   cancelSignIn: () => Promise<void>
   signOut: () => Promise<void>
   clearError: () => void
