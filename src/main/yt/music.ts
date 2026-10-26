@@ -7,8 +7,10 @@ import type {
   AudioQuality,
   CollectionData,
   CollectionKind,
+  CollectionLibraryState,
   CollectionSection,
   CollectionTrackPage,
+  CreatedPlaylist,
   LibraryListData,
   LibraryListKind,
   LyricsQuery,
@@ -16,6 +18,8 @@ import type {
   MediaItem,
   MediaKind,
   PlaybackSource,
+  PlaylistChoice,
+  PlaylistChoices,
   HomeData,
   HomeSection,
   SearchFilter,
@@ -157,6 +161,41 @@ interface PlaylistContext {
   thumbnails: MediaItem['thumbnails']
 }
 
+interface CollectionSaveContext {
+  saved: boolean
+  canSave: boolean
+  canEdit: boolean
+  targetPlaylistId?: string
+  channelId?: string
+}
+
+interface HeaderButtonNode {
+  icon_type?: string
+  is_toggled?: boolean
+  endpoint?: {
+    name?: string
+    payload?: { target?: { playlistId?: string } }
+  }
+  toggled_endpoint?: {
+    name?: string
+    payload?: { target?: { playlistId?: string } }
+  }
+  menu?: { items?: unknown[] }
+}
+
+interface SubscriptionNode {
+  subscribed?: boolean
+  channel_id?: string
+}
+
+interface EditableHeaderNode {
+  constructor?: { name?: string }
+  header?: unknown
+  edit_header?: unknown
+  buttons?: unknown[]
+  subscription_button?: SubscriptionNode
+}
+
 interface LibraryBrowseResponse {
   contents_memo?: Map<string, unknown[]>
   continuation_contents?: {
@@ -196,6 +235,8 @@ class MusicService {
   private accountProfile: AccountProfile | null | undefined
   private libraryContexts = new Map<LibraryListKind, LibraryListContext>()
   private pendingLibraryMore = new Map<LibraryListKind, Promise<LibraryListData>>()
+  private collectionSaveContexts = new Map<string, CollectionSaveContext>()
+  private playlistPickerContext: LibraryListContext = {}
 
   async init(): Promise<Innertube> {
     if (this.yt) return this.yt
@@ -244,6 +285,8 @@ class MusicService {
     this.albumYearCache.clear()
     this.libraryContexts.clear()
     this.pendingLibraryMore.clear()
+    this.collectionSaveContexts.clear()
+    this.playlistPickerContext = {}
 
     await this.init()
   }
@@ -383,10 +426,7 @@ class MusicService {
     return yt
   }
 
-  private mapLibraryResponse(
-    response: LibraryBrowseResponse,
-    kind: LibraryListKind
-  ): { items: MediaItem[]; continuation?: string } {
+  private libraryRawItems(response: LibraryBrowseResponse): unknown[] {
     const memo = response.contents_memo
     const rawItems: unknown[] = []
     const seenRaw = new Set<unknown>()
@@ -421,6 +461,14 @@ class MusicService {
       }
     }
 
+    return rawItems
+  }
+
+  private mapLibraryResponse(
+    response: LibraryBrowseResponse,
+    kind: LibraryListKind
+  ): { items: MediaItem[]; continuation?: string } {
+    const rawItems = this.libraryRawItems(response)
     const expectedKind = LIBRARY_ITEM_KINDS[kind]
     const seen = new Set<string>()
     const items: MediaItem[] = []
@@ -1034,7 +1082,8 @@ class MusicService {
       thumbnails,
       tracks,
       sections: this.mapSections(album.sections),
-      totalTracks: this.parseTrackCount(meta)
+      totalTracks: this.parseTrackCount(meta),
+      library: this.mapCollectionSave('album', id, header)
     }
   }
 
@@ -1073,7 +1122,8 @@ class MusicService {
       tracks,
       sections,
       hasMore: Boolean(playlist.has_continuation),
-      totalTracks: this.parseTrackCount(meta)
+      totalTracks: this.parseTrackCount(meta),
+      library: this.mapCollectionSave('playlist', id, header)
     }
   }
 
@@ -1138,7 +1188,8 @@ class MusicService {
       allTracks: allTracks.length > 0 ? allTracks : undefined,
       sections: this.mapSections(rawSections.filter((section) => section !== topSongs)),
       hasMore: allTracksHasMore,
-      totalTracks: allTracks.length > 0 ? allTracks.length : undefined
+      totalTracks: allTracks.length > 0 ? allTracks.length : undefined,
+      library: this.mapCollectionSave('artist', id, header)
     }
   }
 
@@ -1354,6 +1405,81 @@ class MusicService {
     }
   }
 
+  private mapCollectionSave(
+    kind: CollectionKind,
+    id: string,
+    header: unknown
+  ): CollectionLibraryState {
+    const raw = header as EditableHeaderNode | undefined
+    const wrapper = raw?.constructor?.name === 'MusicEditablePlaylistDetailHeader'
+    const nodes = (wrapper ? [raw?.header, raw?.edit_header] : [raw]).filter(
+      (node): node is EditableHeaderNode => Boolean(node)
+    )
+    const buttons = nodes.flatMap((node) =>
+      Array.isArray(node.buttons) ? (node.buttons as HeaderButtonNode[]) : []
+    )
+    const subscription = nodes
+      .map((node) => node.subscription_button)
+      .find((button): button is SubscriptionNode => Boolean(button?.channel_id))
+
+    let saved = false
+    let canSave = false
+    let canEdit = wrapper
+    let targetPlaylistId: string | undefined
+
+    for (const button of buttons) {
+      if (!button) continue
+      if (button.icon_type === 'EDIT') canEdit = true
+      if (button.icon_type !== 'BOOKMARK_BORDER' && button.icon_type !== 'BOOKMARK') continue
+
+      const target =
+        button.endpoint?.payload?.target?.playlistId ??
+        button.toggled_endpoint?.payload?.target?.playlistId
+      if (!target) continue
+
+      canSave = true
+      saved = Boolean(button.is_toggled)
+      targetPlaylistId = target
+    }
+
+    if (kind === 'artist' && subscription) {
+      canSave = true
+      saved = Boolean(subscription.subscribed)
+    }
+
+    this.collectionSaveContexts.set(`${kind}:${id}`, {
+      saved,
+      canSave,
+      canEdit,
+      targetPlaylistId,
+      channelId: kind === 'artist' ? subscription?.channel_id : undefined
+    })
+
+    return { saved, canSave, canEdit }
+  }
+
+  private async collectionSaveContext(
+    kind: CollectionKind,
+    id: string
+  ): Promise<CollectionSaveContext> {
+    const key = `${kind}:${id}`
+    const cached = this.collectionSaveContexts.get(key)
+    if (cached) return cached
+
+    const music = await this.music()
+    const page =
+      kind === 'album'
+        ? await music.getAlbum(id)
+        : kind === 'playlist'
+          ? await music.getPlaylist(id)
+          : await music.getArtist(id)
+
+    this.mapCollectionSave(kind, id, page.header)
+    const context = this.collectionSaveContexts.get(key)
+    if (!context) throw new Error('This page does not expose library actions.')
+    return context
+  }
+
   private sectionTitle(section: unknown): string | undefined {
     const value = section as MediaSection | undefined
     return this.text(value?.title) ?? this.text(value?.header?.title)
@@ -1492,6 +1618,11 @@ class MusicService {
     try {
       const music = await this.music()
       const info = await music.getInfo(id)
+      const likeButton = info.player_overlays?.actions?.find(
+        (action) => action.type === 'LikeButton'
+      ) as { like_status?: string } | undefined
+
+      if (likeButton) return likeButton.like_status === 'LIKE'
       return Boolean(info.basic_info.is_liked)
     } catch {
       return false
@@ -1504,13 +1635,112 @@ class MusicService {
     }
 
     const yt = await this.getYt()
-    if (liked) {
-      await yt.interact.like(id)
-    } else {
-      await yt.interact.removeRating(id)
-    }
+    await yt.actions.execute(liked ? '/like/like' : '/like/removelike', {
+      target: { videoId: id },
+      client: 'YTMUSIC'
+    })
 
     return liked
+  }
+
+  async setCollectionSaved(kind: CollectionKind, id: string, saved: boolean): Promise<boolean> {
+    const yt = await this.requireSignedIn()
+    const context = await this.collectionSaveContext(kind, id)
+
+    if (!context.canSave) {
+      throw new Error(
+        kind === 'artist'
+          ? 'This artist cannot be subscribed to.'
+          : 'This collection cannot be saved to your library.'
+      )
+    }
+
+    if (kind === 'artist') {
+      if (!context.channelId) throw new Error('This artist has no subscription channel.')
+      if (saved) await yt.interact.subscribe(context.channelId)
+      else await yt.interact.unsubscribe(context.channelId)
+    } else {
+      if (!context.targetPlaylistId) throw new Error('This collection has no library target.')
+      await yt.actions.execute(saved ? '/like/like' : '/like/removelike', {
+        target: { playlistId: context.targetPlaylistId }
+      })
+    }
+
+    context.saved = saved
+    this.collectionSaveContexts.set(`${kind}:${id}`, context)
+    return saved
+  }
+
+  async playlists(more = false): Promise<PlaylistChoices> {
+    const yt = await this.requireSignedIn()
+    const continuation = more ? this.playlistPickerContext.continuation : undefined
+    if (more && !continuation) return { items: [], hasMore: false }
+
+    const response = (await yt.actions.execute('/browse', {
+      ...(continuation ? { continuation } : { browseId: 'FEmusic_liked_playlists' }),
+      client: 'YTMUSIC',
+      parse: true
+    })) as unknown as LibraryBrowseResponse
+
+    const account = await this.account()
+    const items: PlaylistChoice[] = []
+    const seen = new Set<string>()
+
+    for (const raw of this.libraryRawItems(response)) {
+      const item = this.mapItem(raw)
+      if (!item || item.kind !== 'playlist') continue
+      if (item.id === 'VLLM' || item.id === 'VLRDPN') continue
+      if (seen.has(item.id)) continue
+      if (!this.isEditablePlaylistItem(raw, item.subtitle, account?.name)) continue
+
+      seen.add(item.id)
+      items.push({
+        id: item.id,
+        title: item.title,
+        subtitle: item.subtitle,
+        thumbnails: item.thumbnails
+      })
+    }
+
+    const next = this.libraryContinuation(response)
+    this.playlistPickerContext = { continuation: next }
+    return { items, hasMore: Boolean(next) }
+  }
+
+  async addToPlaylist(playlistId: string, videoId: string): Promise<void> {
+    const yt = await this.requireSignedIn()
+    const id = playlistId.replace(/^VL/, '')
+    if (!id) throw new Error('Invalid playlist id')
+
+    await yt.playlist.addVideos(id, [videoId])
+  }
+
+  async createPlaylist(title: string, videoId: string): Promise<CreatedPlaylist> {
+    const yt = await this.requireSignedIn()
+    const result = await yt.playlist.create(title, [videoId])
+
+    if (!result.success || !result.playlist_id) {
+      throw new Error('YouTube Music could not create the playlist.')
+    }
+
+    return { id: `VL${result.playlist_id}`, title }
+  }
+
+  private isEditablePlaylistItem(
+    raw: unknown,
+    subtitle: string | undefined,
+    accountName: string | undefined
+  ): boolean {
+    const menu = (raw as { menu?: { items?: unknown[] } }).menu
+    for (const entry of menu?.items ?? []) {
+      const value = entry as HeaderButtonNode
+      if (value.icon_type === 'EDIT') return true
+      if (value.endpoint?.name === 'playlistEditorEndpoint') return true
+    }
+
+    if (!accountName) return false
+    const author = subtitle?.split('•')[0]?.trim()
+    return author === accountName
   }
 
   async resolve(videoId: string, force = false): Promise<PlaybackSource> {

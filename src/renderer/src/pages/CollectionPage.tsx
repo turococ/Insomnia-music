@@ -1,24 +1,31 @@
 import {
   ArrowLeft,
+  BookmarkCheck,
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Disc3,
   Loader2,
   Play,
   Shuffle,
+  UserCheck,
+  UserPlus,
   UserRound
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { CollectionKind, MediaItem } from '@shared/types'
+import type { CollectionData, CollectionKind, MediaItem } from '@shared/types'
 import { MediaShelf } from '@renderer/components/MediaShelf'
 import { TrackList } from '@renderer/components/TrackList'
 import { TrackToolbar } from '@renderer/components/TrackToolbar'
+import { toast } from '@renderer/features/toast/store'
 import { usePlayer, type QueueSource } from '@renderer/features/player/store'
 import { useTrackSort } from '@renderer/features/tracks/useTrackSort'
 import { cn } from '@renderer/lib/cn'
+import { errorMessage } from '@renderer/lib/errors'
 import { collectionPath, isPlayable, mergeTracks, pickThumbnail } from '@renderer/lib/media'
+import { queryClient } from '@renderer/lib/queryClient'
 import { filterTracks } from '@renderer/lib/trackFilter'
 
 interface CollectionPageProps {
@@ -75,6 +82,7 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const [loadMoreError, setLoadMoreError] = useState(false)
   const [query, setQuery] = useState('')
   const [bulkLoading, setBulkLoading] = useState(false)
+  const [libraryPending, setLibraryPending] = useState(false)
   const bulkRequest = useRef(0)
   const bulkLoadingRef = useRef(false)
   const collectionKey = `${kind}:${id ?? ''}`
@@ -185,6 +193,41 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
   const handleSortChange = (next: Parameters<typeof changeSort>[0]): void => {
     changeSort(next)
     if (kind === 'playlist' && hasMore) void loadAllTracks()
+  }
+
+  const updateLibraryCache = (saved: boolean): void => {
+    if (!id) return
+    queryClient.setQueryData<CollectionData>(['collection', kind, id], (previous) =>
+      previous?.library ? { ...previous, library: { ...previous.library, saved } } : previous
+    )
+  }
+
+  const toggleLibrary = async (): Promise<void> => {
+    if (!id || !data?.library?.canSave || libraryPending) return
+
+    const next = !data.library.saved
+    setLibraryPending(true)
+    updateLibraryCache(next)
+
+    try {
+      const saved = await window.api.music.setCollectionSaved(kind, id, next)
+      updateLibraryCache(saved)
+      await queryClient.invalidateQueries({ queryKey: ['library'] })
+      toast(
+        kind === 'artist'
+          ? saved
+            ? 'Subscribed to this artist'
+            : 'Unsubscribed from this artist'
+          : saved
+            ? 'Saved to your library'
+            : 'Removed from your library'
+      )
+    } catch (error) {
+      updateLibraryCache(!next)
+      toast(errorMessage(error, 'Could not update your library.'), 'error')
+    } finally {
+      setLibraryPending(false)
+    }
   }
 
   if (isLoading) return <CollectionSkeleton />
@@ -380,6 +423,41 @@ export function CollectionPage({ kind }: CollectionPageProps): React.JSX.Element
                   <Shuffle className="size-4" />
                   Shuffle
                 </button>
+                {data.library?.canSave && (
+                  <button
+                    type="button"
+                    onClick={() => void toggleLibrary()}
+                    disabled={libraryPending}
+                    aria-pressed={data.library.saved}
+                    className={cn(
+                      'flex items-center gap-2 rounded-full border px-5 py-2.5 text-[13px] font-medium transition disabled:cursor-wait disabled:opacity-60',
+                      data.library.saved
+                        ? 'border-accent/40 bg-accent/10 text-accent'
+                        : 'border-line bg-surface-2/60 text-muted hover:border-accent/30 hover:text-ink'
+                    )}
+                  >
+                    {libraryPending ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : kind === 'artist' ? (
+                      data.library.saved ? (
+                        <UserCheck className="size-4" />
+                      ) : (
+                        <UserPlus className="size-4" />
+                      )
+                    ) : data.library.saved ? (
+                      <BookmarkCheck className="size-4" />
+                    ) : (
+                      <BookmarkPlus className="size-4" />
+                    )}
+                    {kind === 'artist'
+                      ? data.library.saved
+                        ? 'Subscribed'
+                        : 'Subscribe'
+                      : data.library.saved
+                        ? 'Saved'
+                        : 'Save'}
+                  </button>
+                )}
               </div>
             </div>
           </div>

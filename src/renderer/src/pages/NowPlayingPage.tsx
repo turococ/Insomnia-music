@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom'
 import { cn } from '@renderer/lib/cn'
 import { formatTime, itemSubtitle, pickThumbnail } from '@renderer/lib/media'
 import { useAuth } from '@renderer/features/auth/context'
+import { useLikes } from '@renderer/features/library/likes'
 import { LyricsView } from '@renderer/features/player/LyricsView'
 import { useTrackMenu } from '@renderer/features/player/menu'
 import { usePlayer } from '@renderer/features/player/store'
@@ -69,8 +70,6 @@ export function NowPlayingPage(): React.JSX.Element {
   const duration = usePlayer((state) => state.duration)
   const repeat = usePlayer((state) => state.repeat)
   const shuffle = usePlayer((state) => state.shuffle)
-  const liked = usePlayer((state) => state.liked)
-  const likePending = usePlayer((state) => state.likePending)
   const queueOpen = usePlayer((state) => state.queueOpen)
   const toggle = usePlayer((state) => state.toggle)
   const next = usePlayer((state) => state.next)
@@ -78,11 +77,13 @@ export function NowPlayingPage(): React.JSX.Element {
   const seek = usePlayer((state) => state.seek)
   const toggleShuffle = usePlayer((state) => state.toggleShuffle)
   const cycleRepeat = usePlayer((state) => state.cycleRepeat)
-  const toggleLike = usePlayer((state) => state.toggleLike)
   const startRadio = usePlayer((state) => state.startRadio)
   const addToQueue = usePlayer((state) => state.addToQueue)
   const toggleQueue = usePlayer((state) => state.toggleQueue)
   const openMenu = useTrackMenu((state) => state.open)
+  const liked = useLikes((state) => (current ? (state.status[current.id] ?? false) : false))
+  const likePending = useLikes((state) => (current ? Boolean(state.pending[current.id]) : false))
+  const toggleLiked = useLikes((state) => state.toggle)
   const { status } = useAuth()
   const moreRef = useRef<HTMLButtonElement>(null)
 
@@ -218,7 +219,9 @@ export function NowPlayingPage(): React.JSX.Element {
               </div>
               <button
                 type="button"
-                onClick={() => void toggleLike()}
+                onClick={() => {
+                  if (current) void toggleLiked(current)
+                }}
                 disabled={!authenticated || likePending}
                 aria-label={liked ? 'Remove from liked songs' : 'Like'}
                 aria-pressed={liked}
@@ -346,7 +349,9 @@ export function NowPlayingPage(): React.JSX.Element {
                   label={liked ? 'Liked' : 'Like'}
                   active={liked}
                   disabled={!authenticated || likePending}
-                  onClick={() => void toggleLike()}
+                  onClick={() => {
+                    if (current) void toggleLiked(current)
+                  }}
                 />
                 <ActionButton
                   icon={Radio}

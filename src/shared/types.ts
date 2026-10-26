@@ -48,6 +48,12 @@ export interface CollectionSection {
   items: MediaItem[]
 }
 
+export interface CollectionLibraryState {
+  saved: boolean
+  canSave: boolean
+  canEdit: boolean
+}
+
 export interface CollectionData {
   id: string
   kind: CollectionKind
@@ -62,6 +68,24 @@ export interface CollectionData {
   sections: CollectionSection[]
   hasMore?: boolean
   totalTracks?: number
+  library?: CollectionLibraryState
+}
+
+export interface PlaylistChoice {
+  id: string
+  title: string
+  subtitle?: string
+  thumbnails: Thumbnail[]
+}
+
+export interface PlaylistChoices {
+  items: PlaylistChoice[]
+  hasMore: boolean
+}
+
+export interface CreatedPlaylist {
+  id: string
+  title: string
 }
 
 export interface CollectionTrackPage {
@@ -198,6 +222,10 @@ export interface AppApi {
     upNext: (videoId: string, automix?: boolean) => Promise<MediaItem[]>
     likeStatus: (id: string) => Promise<boolean>
     setLiked: (id: string, liked: boolean) => Promise<boolean>
+    setCollectionSaved: (kind: CollectionKind, id: string, saved: boolean) => Promise<boolean>
+    playlists: (more?: boolean) => Promise<PlaylistChoices>
+    addToPlaylist: (playlistId: string, videoId: string) => Promise<void>
+    createPlaylist: (title: string, videoId: string) => Promise<CreatedPlaylist>
   }
   library: {
     list: (kind: LibraryListKind) => Promise<LibraryListData>

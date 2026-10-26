@@ -7,6 +7,8 @@ import { PlayerBar } from './features/player/PlayerBar'
 import { PlayerHotkeys } from './features/player/PlayerHotkeys'
 import { QueuePanel } from './features/player/QueuePanel'
 import { TrackContextMenu } from './features/player/TrackContextMenu'
+import { PlaylistPicker } from './features/library/PlaylistPicker'
+import { Toaster } from './features/toast/Toaster'
 import { usePlayer } from './features/player/store'
 import { HomePage } from './pages/HomePage'
 import { LibraryPage } from './pages/LibraryPage'
@@ -67,6 +69,8 @@ function App(): React.JSX.Element {
       <PlayerBar />
       <QueuePanel />
       <TrackContextMenu />
+      <PlaylistPicker />
+      <Toaster />
       <PlayerHotkeys />
     </div>
   )

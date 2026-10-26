@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useAuth } from '@renderer/features/auth/context'
+import { useLikes } from '@renderer/features/library/likes'
 import { useTrackMenu } from './menu'
 import { usePlayer } from './store'
 
@@ -76,7 +77,7 @@ export function PlayerHotkeys(): null {
           return
         case 'KeyL':
           if (!player.current || !authenticated) return
-          void player.toggleLike()
+          void useLikes.getState().toggle(player.current)
           return
         case 'Escape':
           if (!player.queueOpen) return

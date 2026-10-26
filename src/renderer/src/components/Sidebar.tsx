@@ -98,12 +98,12 @@ export function Sidebar(): React.JSX.Element {
         </div>
         <div className="space-y-2 text-[12px] text-muted">
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
-            Library actions
-          </div>
-          <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
             Offline downloads
           </div>
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">Equalizer</div>
+          <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
+            Listening stats
+          </div>
         </div>
       </div>
 

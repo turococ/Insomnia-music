@@ -33,12 +33,13 @@ export function TrackList({
 
       {tracks.length > 0 ? (
         <div className="rounded-2xl border border-line/60 bg-surface/30 p-2">
-          <div className="hidden grid-cols-[28px_44px_minmax(0,2.2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 pb-2 pt-1 text-[10px] uppercase tracking-[0.14em] text-faint sm:grid">
+          <div className="hidden grid-cols-[28px_44px_minmax(0,2.2fr)_minmax(0,1.3fr)_64px_64px] items-center gap-3 px-3 pb-2 pt-1 text-[10px] uppercase tracking-[0.14em] text-faint sm:grid">
             <span>#</span>
             <span />
             <span>Title</span>
             <span>Album</span>
             <span className="text-right">Time</span>
+            <span />
           </div>
           <div className="space-y-0.5">
             {tracks.map((track, index) => (

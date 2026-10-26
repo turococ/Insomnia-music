@@ -177,6 +177,39 @@ export function registerIpc(): void {
     musicService.setLiked(requireString(id, 'track id', 200), liked === true)
   )
 
+  ipcMain.handle(
+    IPC.musicSetCollectionSaved,
+    (_event, kind: unknown, id: unknown, saved: unknown) => {
+      const collectionKind = requireString(kind, 'collection kind', 20)
+      if (!COLLECTION_KINDS.includes(collectionKind as CollectionKind)) {
+        throw new Error('Invalid collection kind')
+      }
+      return musicService.setCollectionSaved(
+        collectionKind as CollectionKind,
+        requireString(id, 'collection id', 200),
+        saved === true
+      )
+    }
+  )
+
+  ipcMain.handle(IPC.musicPlaylists, (_event, more: unknown) =>
+    musicService.playlists(more === true)
+  )
+
+  ipcMain.handle(IPC.musicAddToPlaylist, (_event, playlistId: unknown, videoId: unknown) =>
+    musicService.addToPlaylist(
+      requireString(playlistId, 'playlist id', 200),
+      requireString(videoId, 'video id', 200)
+    )
+  )
+
+  ipcMain.handle(IPC.musicCreatePlaylist, (_event, title: unknown, videoId: unknown) =>
+    musicService.createPlaylist(
+      requireString(title, 'playlist title', 150),
+      requireString(videoId, 'video id', 200)
+    )
+  )
+
   ipcMain.handle(IPC.libraryList, (_event, kind: unknown) =>
     musicService.libraryList(requireLibraryKind(kind))
   )

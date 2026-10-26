@@ -18,6 +18,7 @@ import { Link } from 'react-router-dom'
 import { cn } from '@renderer/lib/cn'
 import { formatTime, itemSubtitle, pickThumbnail } from '@renderer/lib/media'
 import { useAuth } from '@renderer/features/auth/context'
+import { useLikes } from '@renderer/features/library/likes'
 import { usePlayer } from '@renderer/features/player/store'
 
 export function PlayerBar(): React.JSX.Element {
@@ -32,11 +33,14 @@ export function PlayerBar(): React.JSX.Element {
   const repeat = usePlayer((state) => state.repeat)
   const shuffle = usePlayer((state) => state.shuffle)
   const queueOpen = usePlayer((state) => state.queueOpen)
-  const liked = usePlayer((state) => state.liked)
-  const likePending = usePlayer((state) => state.likePending)
   const error = usePlayer((state) => state.error)
   const { status } = useAuth()
   const authenticated = Boolean(status?.authenticated)
+  const liked = useLikes((state) => (current ? (state.status[current.id] ?? false) : false))
+  const likePending = useLikes((state) => (current ? Boolean(state.pending[current.id]) : false))
+  const ensureLike = useLikes((state) => state.ensure)
+  const toggleLiked = useLikes((state) => state.toggle)
+  const resetLikes = useLikes((state) => state.reset)
 
   const toggle = usePlayer((state) => state.toggle)
   const next = usePlayer((state) => state.next)
@@ -47,16 +51,28 @@ export function PlayerBar(): React.JSX.Element {
   const toggleShuffle = usePlayer((state) => state.toggleShuffle)
   const cycleRepeat = usePlayer((state) => state.cycleRepeat)
   const toggleQueue = usePlayer((state) => state.toggleQueue)
-  const toggleLike = usePlayer((state) => state.toggleLike)
-  const refreshLike = usePlayer((state) => state.refreshLike)
   const wasAuthenticated = useRef(authenticated)
+  const accountKey = authenticated ? (status?.account?.name ?? 'signed-in') : 'signed-out'
 
   useEffect(() => {
-    // Refresh the like status when a session becomes available, since the
-    // status fetched before sign-in was necessarily "not liked".
-    if (authenticated && !wasAuthenticated.current) void refreshLike(true)
-    wasAuthenticated.current = authenticated
-  }, [authenticated, refreshLike])
+    // Like status is session-cached, so drop it when the active account
+    // changes; otherwise another account's hearts could leak through.
+    resetLikes()
+  }, [accountKey, resetLikes])
+
+  useEffect(() => {
+    if (!current) return
+    if (!authenticated) {
+      wasAuthenticated.current = false
+      return
+    }
+
+    // Refresh the like status after a sign-in: any cached value predates the
+    // new session and could belong to another account.
+    const justSignedIn = !wasAuthenticated.current
+    wasAuthenticated.current = true
+    void ensureLike(current.id, justSignedIn)
+  }, [current, authenticated, ensureLike])
 
   const cover = current ? pickThumbnail(current.thumbnails, 160) : undefined
   const RepeatIcon = repeat === 'one' ? Repeat1 : Repeat
@@ -99,7 +115,9 @@ export function PlayerBar(): React.JSX.Element {
         </Link>
         <button
           type="button"
-          onClick={() => void toggleLike()}
+          onClick={() => {
+            if (current) void toggleLiked(current)
+          }}
           disabled={!current || likePending || !authenticated}
           aria-label={liked ? 'Remove from liked songs' : 'Like'}
           aria-pressed={liked}

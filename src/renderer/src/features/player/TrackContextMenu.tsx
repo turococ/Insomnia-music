@@ -1,7 +1,20 @@
-import { CornerDownRight, Disc3, ListMusic, Play, Radio, UserRound } from 'lucide-react'
+import {
+  CornerDownRight,
+  Disc3,
+  Heart,
+  HeartOff,
+  ListMusic,
+  ListPlus,
+  Play,
+  Radio,
+  UserRound
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '@renderer/features/auth/context'
+import { useLikes } from '@renderer/features/library/likes'
+import { usePlaylistPicker } from '@renderer/features/library/picker'
 import { cn } from '@renderer/lib/cn'
 import { useTrackMenu } from './menu'
 import { usePlayer } from './store'
@@ -36,6 +49,13 @@ export function TrackContextMenu(): React.JSX.Element | null {
   const addToQueue = usePlayer((state) => state.addToQueue)
   const startRadio = usePlayer((state) => state.startRadio)
   const navigate = useNavigate()
+  const { status } = useAuth()
+  const authenticated = Boolean(status?.authenticated)
+  const liked = useLikes((state) => (item ? (state.status[item.id] ?? false) : false))
+  const likePending = useLikes((state) => (item ? Boolean(state.pending[item.id]) : false))
+  const ensureLike = useLikes((state) => state.ensure)
+  const toggleLiked = useLikes((state) => state.toggle)
+  const openPlaylistPicker = usePlaylistPicker((state) => state.open)
 
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ left: x, top: y })
@@ -50,6 +70,11 @@ export function TrackContextMenu(): React.JSX.Element | null {
       top: Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))
     })
   }, [item, x, y])
+
+  useEffect(() => {
+    if (!item || !authenticated) return
+    void ensureLike(item.id)
+  }, [item, authenticated, ensureLike])
 
   useEffect(() => {
     if (!item) return
@@ -101,6 +126,24 @@ export function TrackContextMenu(): React.JSX.Element | null {
       <MenuItem icon={CornerDownRight} label="Play next" onClick={run(() => playNext(item))} />
       <MenuItem icon={ListMusic} label="Add to queue" onClick={run(() => addToQueue(item))} />
       <MenuItem icon={Radio} label="Start radio" onClick={run(() => void startRadio(item))} />
+
+      {authenticated && (
+        <>
+          <div className="my-1 h-px bg-line/60" />
+          <MenuItem
+            icon={liked ? HeartOff : Heart}
+            label={liked ? 'Remove from Liked Music' : 'Like'}
+            onClick={run(() => {
+              if (!likePending) void toggleLiked(item)
+            })}
+          />
+          <MenuItem
+            icon={ListPlus}
+            label="Add to playlist…"
+            onClick={run(() => openPlaylistPicker(item))}
+          />
+        </>
+      )}
 
       {(albumId || artist) && <div className="my-1 h-px bg-line/60" />}
       {albumId && (
