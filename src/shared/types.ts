@@ -133,6 +133,26 @@ export interface PlaybackSource {
   headers?: Record<string, string>
 }
 
+export interface LyricsQuery {
+  id: string
+  title: string
+  artist?: string
+  album?: string
+  duration?: number
+}
+
+export interface LyricLine {
+  time: number
+  text: string
+}
+
+export interface LyricsResult {
+  source: 'youtube-music' | 'lrclib'
+  synced: LyricLine[] | null
+  plain: string | null
+  instrumental: boolean
+}
+
 export interface AppApi {
   music: {
     home: (filter?: string) => Promise<HomeData>
@@ -143,7 +163,7 @@ export interface AppApi {
     collectionMore: (kind: CollectionKind, id: string) => Promise<CollectionTrackPage>
     albumYears: (ids: string[]) => Promise<Record<string, number>>
     track: (id: string) => Promise<MediaItem | null>
-    lyrics: (id: string) => Promise<string | null>
+    lyrics: (query: LyricsQuery) => Promise<LyricsResult | null>
     upNext: (videoId: string, automix?: boolean) => Promise<MediaItem[]>
     likeStatus: (id: string) => Promise<boolean>
     setLiked: (id: string, liked: boolean) => Promise<boolean>

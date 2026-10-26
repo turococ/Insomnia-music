@@ -12,15 +12,17 @@ import {
   Radio,
   Repeat,
   Repeat1,
+  ScrollText,
   Shuffle,
   SkipBack,
   SkipForward
 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { cn } from '@renderer/lib/cn'
-import { formatTime, pickThumbnail } from '@renderer/lib/media'
+import { formatTime, itemSubtitle, pickThumbnail } from '@renderer/lib/media'
 import { useAuth } from '@renderer/features/auth/context'
+import { LyricsView } from '@renderer/features/player/LyricsView'
 import { useTrackMenu } from '@renderer/features/player/menu'
 import { usePlayer } from '@renderer/features/player/store'
 
@@ -58,6 +60,7 @@ function ActionButton({
 
 export function NowPlayingPage(): React.JSX.Element {
   const navigate = useNavigate()
+  const [view, setView] = useState<'player' | 'lyrics'>('player')
   const current = usePlayer((state) => state.current)
   const isPlaying = usePlayer((state) => state.isPlaying)
   const isLoading = usePlayer((state) => state.isLoading)
@@ -85,6 +88,7 @@ export function NowPlayingPage(): React.JSX.Element {
 
   const authenticated = Boolean(status?.authenticated)
   const cover = current ? pickThumbnail(current.thumbnails, 640) : undefined
+  const compactCover = current ? pickThumbnail(current.thumbnails, 160) : undefined
   const RepeatIcon = repeat === 'one' ? Repeat1 : Repeat
 
   useEffect(() => {
@@ -92,7 +96,12 @@ export function NowPlayingPage(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="relative flex min-h-full flex-col overflow-hidden">
+    <div
+      className={cn(
+        'relative flex flex-col overflow-hidden',
+        view === 'lyrics' ? 'h-full' : 'min-h-full'
+      )}
+    >
       {cover && (
         <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
           <img
@@ -122,20 +131,48 @@ export function NowPlayingPage(): React.JSX.Element {
             {isLive ? 'Live stream' : isPlaying ? 'Playing from your queue' : 'Paused'}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={toggleQueue}
-          aria-label="Queue"
-          aria-pressed={queueOpen}
-          className={cn(
-            'ml-auto grid size-9 place-items-center rounded-full border transition',
-            queueOpen
-              ? 'border-accent/35 bg-accent/10 text-accent'
-              : 'border-line/70 bg-surface/50 text-muted hover:border-line hover:bg-surface-2 hover:text-ink'
-          )}
-        >
-          <ListMusic className="size-4" />
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex rounded-full border border-line/70 bg-surface/50 p-0.5">
+            <button
+              type="button"
+              onClick={() => setView('player')}
+              aria-pressed={view === 'player'}
+              className={cn(
+                'flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition',
+                view === 'player' ? 'bg-surface-3 text-ink' : 'text-faint hover:text-muted'
+              )}
+            >
+              <Disc3 className="size-3.5" />
+              Track
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('lyrics')}
+              aria-pressed={view === 'lyrics'}
+              className={cn(
+                'flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition',
+                view === 'lyrics' ? 'bg-surface-3 text-ink' : 'text-faint hover:text-muted'
+              )}
+            >
+              <ScrollText className="size-3.5" />
+              Lyrics
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={toggleQueue}
+            aria-label="Queue"
+            aria-pressed={queueOpen}
+            className={cn(
+              'grid size-9 place-items-center rounded-full border transition',
+              queueOpen
+                ? 'border-accent/35 bg-accent/10 text-accent'
+                : 'border-line/70 bg-surface/50 text-muted hover:border-line hover:bg-surface-2 hover:text-ink'
+            )}
+          >
+            <ListMusic className="size-4" />
+          </button>
+        </div>
       </header>
 
       {!current ? (
@@ -156,6 +193,48 @@ export function NowPlayingPage(): React.JSX.Element {
           >
             Browse home
           </button>
+        </div>
+      ) : view === 'lyrics' ? (
+        <div className="relative flex min-h-0 flex-1 flex-col px-8 pb-8">
+          <div className="mx-auto flex min-h-0 w-full max-w-[900px] flex-1 flex-col">
+            <div className="flex shrink-0 items-center gap-3 py-3">
+              <div className="relative size-12 shrink-0 overflow-hidden rounded-xl border border-line/70 bg-surface-2">
+                {compactCover ? (
+                  <img
+                    src={compactCover}
+                    alt=""
+                    draggable={false}
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  <div className="grid size-full place-items-center text-faint">
+                    <Music2 className="size-4" />
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[15px] font-semibold text-ink">{current.title}</div>
+                <div className="truncate text-[11px] text-faint">{itemSubtitle(current)}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void toggleLike()}
+                disabled={!authenticated || likePending}
+                aria-label={liked ? 'Remove from liked songs' : 'Like'}
+                aria-pressed={liked}
+                className={cn(
+                  'grid size-9 shrink-0 place-items-center rounded-full border border-line/70 bg-surface/50 transition hover:border-line hover:bg-surface-2 disabled:opacity-30',
+                  liked ? 'text-accent' : 'text-faint hover:text-ink'
+                )}
+              >
+                <Heart className={cn('size-4', liked && 'fill-current')} />
+              </button>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-line/60 bg-surface/40 p-4 backdrop-blur-sm">
+              <LyricsView key={current.id} track={current} />
+            </div>
+          </div>
         </div>
       ) : (
         <div className="relative flex flex-1 items-center px-8 pb-10">

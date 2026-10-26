@@ -4,6 +4,7 @@ import type {
   AuthStatus,
   CollectionKind,
   LibraryListKind,
+  LyricsQuery,
   SearchFilter,
   SignInOutcome,
   SignInResult
@@ -134,9 +135,33 @@ export function registerIpc(): void {
     musicService.track(requireString(id, 'track id', 200))
   )
 
-  ipcMain.handle(IPC.musicLyrics, (_event, id: unknown) =>
-    musicService.lyrics(requireString(id, 'track id', 200))
-  )
+  ipcMain.handle(IPC.musicLyrics, (_event, query: unknown) => {
+    if (!query || typeof query !== 'object') throw new Error('Invalid lyrics query')
+
+    const value = query as Record<string, unknown>
+    const title = requireString(value.title, 'track title', 300)
+    const artist =
+      typeof value.artist === 'string' && value.artist.trim()
+        ? requireString(value.artist, 'artist name', 300)
+        : undefined
+    const album =
+      typeof value.album === 'string' && value.album.trim()
+        ? requireString(value.album, 'album name', 300)
+        : undefined
+    const duration =
+      typeof value.duration === 'number' && Number.isFinite(value.duration) && value.duration > 0
+        ? value.duration
+        : undefined
+
+    const lyricsQuery: LyricsQuery = {
+      id: requireString(value.id, 'track id', 200),
+      title,
+      artist,
+      album,
+      duration
+    }
+    return musicService.lyrics(lyricsQuery)
+  })
 
   ipcMain.handle(IPC.musicUpNext, (_event, id: unknown, automix: unknown) =>
     musicService.upNext(requireString(id, 'track id', 200), automix === true)

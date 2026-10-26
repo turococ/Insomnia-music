@@ -10,6 +10,8 @@ import type {
   CollectionTrackPage,
   LibraryListData,
   LibraryListKind,
+  LyricsQuery,
+  LyricsResult,
   MediaItem,
   MediaKind,
   PlaybackSource,
@@ -24,6 +26,7 @@ import type {
   SearchTopResult
 } from '@shared/types'
 import { authService } from '../auth'
+import { fetchLrclibLyrics } from '../lyrics'
 import { APP_USER_AGENT } from './constants'
 import { poTokenProvider } from './po-token'
 
@@ -1440,11 +1443,44 @@ class MusicService {
     }
   }
 
-  async lyrics(id: string): Promise<string | null> {
+  async lyrics(query: LyricsQuery): Promise<LyricsResult | null> {
+    const [youtube, lrclib] = await Promise.all([
+      this.youtubeLyrics(query.id),
+      fetchLrclibLyrics(query)
+    ])
+
+    // LRCLIB is the only source with timed lines, so it wins whenever a
+    // synced match exists. Otherwise YouTube Music's plain lyrics are the
+    // preferred fallback, then LRCLIB's plain text.
+    if (lrclib?.synced) {
+      return {
+        source: 'lrclib',
+        synced: lrclib.synced,
+        plain: lrclib.plain ?? youtube,
+        instrumental: false
+      }
+    }
+
+    if (youtube) {
+      return { source: 'youtube-music', synced: null, plain: youtube, instrumental: false }
+    }
+
+    if (lrclib?.plain) {
+      return { source: 'lrclib', synced: null, plain: lrclib.plain, instrumental: false }
+    }
+
+    if (lrclib?.instrumental) {
+      return { source: 'lrclib', synced: null, plain: null, instrumental: true }
+    }
+
+    return null
+  }
+
+  private async youtubeLyrics(id: string): Promise<string | null> {
     try {
       const music = await this.music()
       const lyrics = await music.getLyrics(id)
-      return lyrics?.description?.toString() ?? null
+      return lyrics?.description?.toString().trim() || null
     } catch {
       return null
     }
