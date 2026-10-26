@@ -261,6 +261,30 @@ export function registerIpc(): void {
 
   ipcMain.handle(IPC.appVersion, () => app.getVersion())
 
+  ipcMain.on(IPC.windowMinimize, (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+
+  ipcMain.handle(IPC.windowToggleMaximize, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return false
+
+    const next = !win.isMaximized()
+    if (next) win.maximize()
+    else win.unmaximize()
+
+    return next
+  })
+
+  ipcMain.on(IPC.windowClose, (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
+  })
+
+  ipcMain.handle(
+    IPC.windowIsMaximized,
+    (event) => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false
+  )
+
   ipcMain.handle(IPC.updatesStatus, () => getUpdateState())
   ipcMain.handle(IPC.updatesCheck, () => checkForUpdates())
   ipcMain.handle(IPC.updatesDownload, () => downloadUpdate())

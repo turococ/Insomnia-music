@@ -1,5 +1,4 @@
 import {
-  ChevronRight,
   Headphones,
   Home,
   Library,
@@ -11,7 +10,7 @@ import {
   UserRound
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { useAuth } from '@renderer/features/auth/context'
 import { cn } from '@renderer/lib/cn'
 
@@ -23,10 +22,10 @@ const navigation = [
 ]
 
 export function Sidebar(): React.JSX.Element {
-  const navigate = useNavigate()
   const { status, isLoading, isPending, signIn, cancelSignIn, signOut } = useAuth()
   const account = status?.account
   const authenticated = Boolean(status?.authenticated)
+  const isMac = window.electron.process.platform === 'darwin'
   const [version, setVersion] = useState('')
 
   useEffect(() => {
@@ -43,7 +42,12 @@ export function Sidebar(): React.JSX.Element {
   }, [])
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-line/80 bg-surface/50 px-4 pb-4 pt-6">
+    <aside
+      className={cn(
+        'flex w-[248px] shrink-0 flex-col border-r border-line/80 bg-surface/50 px-4 pb-4',
+        isMac ? 'pt-14' : 'pt-6'
+      )}
+    >
       <div className="mb-9 flex items-center gap-3 px-2">
         <div className="grid size-10 place-items-center rounded-2xl bg-accent text-accent-ink shadow-[0_0_32px_-8px] shadow-accent/60">
           <Headphones className="size-5" strokeWidth={2.5} />
@@ -145,15 +149,6 @@ export function Sidebar(): React.JSX.Element {
               )}
             </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => navigate('/library')}
-            className="mt-3 flex w-full items-center justify-between rounded-xl border border-line/70 bg-canvas/40 px-3 py-2 text-[11px] font-medium text-muted transition hover:border-accent/30 hover:text-ink"
-          >
-            Open library
-            <ChevronRight className="size-3.5" />
-          </button>
         </div>
       ) : (
         <div className="mt-auto rounded-2xl border border-line/80 bg-gradient-to-br from-surface-2 to-surface p-3.5">

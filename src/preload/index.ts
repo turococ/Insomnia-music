@@ -51,6 +51,17 @@ const api: AppApi = {
       return () => ipcRenderer.removeListener(IPC.playerCommand, listener)
     }
   },
+  window: {
+    minimize: () => ipcRenderer.send(IPC.windowMinimize),
+    toggleMaximize: () => ipcRenderer.invoke(IPC.windowToggleMaximize),
+    close: () => ipcRenderer.send(IPC.windowClose),
+    isMaximized: () => ipcRenderer.invoke(IPC.windowIsMaximized),
+    onMaximizedChange: (callback) => {
+      const listener = (_event: IpcRendererEvent, maximized: boolean): void => callback(maximized)
+      ipcRenderer.on(IPC.windowMaximizedChanged, listener)
+      return () => ipcRenderer.removeListener(IPC.windowMaximizedChanged, listener)
+    }
+  },
   updates: {
     status: () => ipcRenderer.invoke(IPC.updatesStatus),
     check: () => ipcRenderer.invoke(IPC.updatesCheck),

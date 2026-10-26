@@ -72,6 +72,9 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#09090b',
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const }
+      : { frame: false }),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -93,6 +96,14 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send(IPC.windowMaximizedChanged, true)
+  })
+
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send(IPC.windowMaximizedChanged, false)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

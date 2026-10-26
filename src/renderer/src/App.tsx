@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Route, Routes, useLocation, useParams } from 'react-router-dom'
 import type { CollectionKind } from '@shared/types'
 import { Sidebar } from './components/Sidebar'
-import { TopBar } from './components/TopBar'
+import { TitleBar } from './components/TitleBar'
 import { PlayerBar } from './features/player/PlayerBar'
 import { PlayerHotkeys } from './features/player/PlayerHotkeys'
 import { QueuePanel } from './features/player/QueuePanel'
@@ -59,7 +59,7 @@ function App(): React.JSX.Element {
         <Sidebar />
         <div className="relative flex min-w-0 flex-1 flex-col">
           <div className="app-glow pointer-events-none absolute inset-x-0 top-0 h-64" />
-          <TopBar />
+          <TitleBar />
           <main ref={setScrollElement} className="relative min-h-0 flex-1 overflow-y-auto">
             <MainScrollProvider value={scrollElement}>
               <Routes>

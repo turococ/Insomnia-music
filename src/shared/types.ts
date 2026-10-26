@@ -249,6 +249,13 @@ export interface AppApi {
     version: () => Promise<string>
     onPlayerCommand: (callback: (command: PlayerCommand) => void) => () => void
   }
+  window: {
+    minimize: () => void
+    toggleMaximize: () => Promise<boolean>
+    close: () => void
+    isMaximized: () => Promise<boolean>
+    onMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+  }
   updates: {
     status: () => Promise<UpdateState>
     check: () => Promise<UpdateState>
