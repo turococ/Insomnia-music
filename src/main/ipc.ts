@@ -1,6 +1,13 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
-import type { AuthStatus, CollectionKind, LibraryListKind, SearchFilter } from '@shared/types'
+import type {
+  AuthStatus,
+  CollectionKind,
+  LibraryListKind,
+  SearchFilter,
+  SignInOutcome,
+  SignInResult
+} from '@shared/types'
 import { authService } from './auth'
 import { mediaProxy } from './media-proxy'
 import { musicService } from './yt/music'
@@ -56,6 +63,24 @@ async function authStatus(strict = false): Promise<AuthStatus> {
     // library surface any network error instead of silently signing out.
     return { authenticated: true }
   }
+}
+
+async function finishSignIn(outcome: SignInOutcome): Promise<SignInResult> {
+  // Even a cancelled attempt may have cleared an invalid saved session.
+  await musicService.reloadSession()
+  // A completed sign-in must produce a usable account, not merely a cookie
+  // string. This catches a session YouTube Music rejected.
+  const status = await authStatus(true)
+
+  // The browser fallback found cookies, but YouTube Music rejected them.
+  // Clear the browser profile so the next attempt starts with a fresh Google
+  // sign-in instead of re-importing the same rejected session.
+  if (outcome === 'signed-in' && !status.authenticated) {
+    await authService.resetBrowserProfile()
+    throw new Error('YouTube Music did not accept the sign-in session. Please try again.')
+  }
+
+  return { status, outcome }
 }
 
 export function registerIpc(): void {
@@ -131,22 +156,13 @@ export function registerIpc(): void {
 
   ipcMain.handle(IPC.authSignIn, async (event) => {
     const parent = BrowserWindow.fromWebContents(event.sender)
-    const signedIn = await authService.signIn(parent)
-    // Even a cancelled attempt may have cleared an invalid saved session.
-    await musicService.reloadSession()
-    // A completed browser handoff must produce a usable account, not merely
-    // a cookie string. This catches a session YouTube Music rejected.
-    const status = await authStatus(true)
+    const outcome = await authService.signIn(parent)
+    return finishSignIn(outcome)
+  })
 
-    // The browser flow found cookies, but YouTube Music rejected them. Clear
-    // the browser profile so the next attempt starts with a fresh Google
-    // sign-in instead of re-importing the same rejected session.
-    if (signedIn && !status.authenticated) {
-      await authService.resetBrowserProfile()
-      throw new Error('YouTube Music did not accept the sign-in session. Please try again.')
-    }
-
-    return status
+  ipcMain.handle(IPC.authSignInBrowser, async () => {
+    const outcome = await authService.signInWithBrowser()
+    return finishSignIn(outcome)
   })
 
   ipcMain.handle(IPC.authSignOut, async () => {

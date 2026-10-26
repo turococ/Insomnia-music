@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, unlinkSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import type { SignInOutcome } from '@shared/types'
 import { app, BrowserWindow, session, shell, type Session } from 'electron'
 
 const AUTH_PARTITION = 'persist:toneglass-auth'
@@ -17,6 +18,20 @@ const BROWSER_START_TIMEOUT_MS = 20_000
 const BROWSER_TARGET_TIMEOUT_MS = 15_000
 const BROWSER_CLOSE_TIMEOUT_MS = 3_000
 const BROWSER_PROFILE_DIR = 'auth-browser'
+// The in-app sign-in window needs a complete Google session before it can be
+// handed to YouTube Music. A settle delay lets the last cookies arrive.
+const EMBEDDED_SETTLE_MS = 2_500
+// Once Google redirects to YouTube Music the login is done; hide the window.
+// If the session still is not complete after this, show it again.
+const EMBEDDED_REVEAL_MS = 20_000
+// Google's interstitial ("This browser or app may not be secure") is rendered
+// as plain page text. Match a few of its common variants.
+const BLOCK_MESSAGE_PATTERNS = [
+  /may not be secure/i,
+  /try using a different browser/i,
+  /небезопас/i,
+  /другой браузер/i
+]
 // Chrome stores cookie expiry as microseconds since 1601-01-01. Session
 // cookies (including YouTube's SAPISID) are not restored when Chrome reopens
 // the profile, so mark them persistent before reading them through CDP.
@@ -117,6 +132,21 @@ function hasAuthCookies(cookies: CookieLike[]): boolean {
   )
 }
 
+/**
+ * A session is only usable once Google has issued the cookies YouTube Music
+ * actually authenticates with. Any single auth cookie is not enough; partial
+ * sessions get rejected and must not be treated as success.
+ */
+function hasCompleteAuthSession(cookies: CookieLike[]): boolean {
+  const names = new Set(
+    cookies
+      .filter((cookie) => Boolean(cookie.value) && Boolean(cookie.name))
+      .map((cookie) => cookie.name as string)
+  )
+  if (!names.has('SAPISID')) return false
+  return names.has('__Secure-1PSID') || names.has('__Secure-3PSID')
+}
+
 function cookieFingerprint(cookies: CookieLike[]): string {
   return cookies
     .filter((cookie) => Boolean(cookie.name) && AUTH_COOKIE_NAMES.has(cookie.name as string))
@@ -150,6 +180,30 @@ function isSecureCookie(cookie: CdpCookie): boolean {
     Boolean(cookie.name?.startsWith('__Secure-')) ||
     Boolean(cookie.name?.startsWith('__Host-'))
   )
+}
+
+function isAuthHostUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    return (
+      host === 'google.com' ||
+      host.endsWith('.google.com') ||
+      host === 'youtube.com' ||
+      host.endsWith('.youtube.com') ||
+      host === 'gstatic.com' ||
+      host.endsWith('.gstatic.com')
+    )
+  } catch {
+    return false
+  }
+}
+
+function isMusicYouTubeUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === 'music.youtube.com'
+  } catch {
+    return false
+  }
 }
 
 function cookieUrl(domain: string, secure: boolean, path: string | undefined): string {
@@ -366,9 +420,9 @@ async function clearBrowserSingletonFiles(profileDir: string): Promise<void> {
   }
 }
 
-// Google blocks embedded Chromium sessions from its account flow with
-// "This browser or app may not be secure". The browser flow is the reliable
-// path; this user agent is only used by the built-in fallback.
+// Google's account flow rejects requests it can tie to Electron with
+// "This browser or app may not be secure". The in-app sign-in window always
+// presents a clean Chrome user agent that matches the embedded engine.
 function loginUserAgent(): string {
   const platform =
     process.platform === 'win32'
@@ -636,14 +690,13 @@ async function waitForPageTarget(
 
 /**
  * Keeps the YouTube Music session in a dedicated Chromium partition. The
- * primary flow signs in through the user's real browser with a persistent
- * dedicated profile, then copies only YouTube cookies into this partition.
- * The built-in window is only a fallback for machines without a supported
- * Chromium browser.
+ * primary flow signs in inside a ToneGlass window that shares this partition,
+ * so no cookie handoff is needed. A real Chromium browser is only used as an
+ * explicit fallback for the rare case where Google refuses the in-app window.
  */
 class AuthService {
   private loginWindow: BrowserWindow | null = null
-  private signInTask: Promise<boolean> | null = null
+  private signInTask: Promise<SignInOutcome> | null = null
   private browserProcess: ChildProcess | null = null
   private profileDirCache: string | null = null
   private cancelRequested = false
@@ -674,7 +727,7 @@ class AuthService {
     return hasAuthCookies(cookies)
   }
 
-  async signIn(parent?: BrowserWindow | null): Promise<boolean> {
+  async signIn(parent?: BrowserWindow | null): Promise<SignInOutcome> {
     if (this.signInTask) {
       this.loginWindow?.focus()
       return this.signInTask
@@ -685,14 +738,40 @@ class AuthService {
       // Always begin with an empty Electron session. Stale cookies can leave
       // the app in a broken half-signed-in state.
       await this.clearSessionData()
+      return this.signInEmbedded(parent)
+    })()
+
+    this.signInTask = task
+    try {
+      return await task
+    } finally {
+      if (this.signInTask === task) this.signInTask = null
+    }
+  }
+
+  /**
+   * Fallback for when Google refuses the in-app window. Runs the whole
+   * sign-in in a real Chromium browser and imports the resulting session.
+   */
+  async signInWithBrowser(): Promise<SignInOutcome> {
+    if (this.signInTask) {
+      this.loginWindow?.focus()
+      return this.signInTask
+    }
+
+    const task = (async () => {
+      this.cancelRequested = false
+      await this.clearSessionData()
 
       const browser = findBrowser()
       if (!browser) {
-        console.info('[auth] no supported browser found; using the built-in sign-in window')
-        return this.signInEmbedded(parent)
+        throw new Error(
+          'No supported browser was found. Install Google Chrome or Microsoft Edge to use this sign-in option.'
+        )
       }
 
-      return this.signInInBrowser(browser)
+      const signedIn = await this.signInInBrowser(browser)
+      return signedIn ? 'signed-in' : 'canceled'
     })()
 
     this.signInTask = task
@@ -1066,31 +1145,45 @@ class AuthService {
     )
   }
 
-  private async signInEmbedded(parent?: BrowserWindow | null): Promise<boolean> {
+  /**
+   * Signs in inside a ToneGlass-owned window. Cookies land directly in the
+   * auth partition, so there is no browser automation or cookie handoff. The
+   * window hides itself once Google redirects to YouTube Music and reports
+   * whether the resulting session was complete.
+   */
+  private async signInEmbedded(parent?: BrowserWindow | null): Promise<SignInOutcome> {
     const ses = this.authSession()
+    const userAgent = loginUserAgent()
+    ses.setUserAgent(userAgent)
+
     const initialCookies = await ses.cookies.get({ url: AUTH_COOKIE_URL })
     const initialFingerprint = cookieFingerprint(initialCookies)
 
-    return new Promise<boolean>((resolve) => {
+    return new Promise<SignInOutcome>((resolve) => {
       let settled = false
       let retryLoad: NodeJS.Timeout | undefined
+      let settleTimer: NodeJS.Timeout | undefined
+      let revealTimer: NodeJS.Timeout | undefined
+      let blocked = false
 
-      const finish = (signedIn: boolean): void => {
+      const finish = (outcome: SignInOutcome): void => {
         if (settled) return
         settled = true
         clearInterval(poll)
         clearTimeout(timeout)
         if (retryLoad) clearTimeout(retryLoad)
+        if (settleTimer) clearTimeout(settleTimer)
+        if (revealTimer) clearTimeout(revealTimer)
         this.loginWindow = null
         if (loginWindow && !loginWindow.isDestroyed()) loginWindow.close()
-        resolve(signedIn)
+        resolve(outcome)
       }
 
       const loginWindow = new BrowserWindow({
-        width: 560,
-        height: 760,
-        minWidth: 440,
-        minHeight: 580,
+        width: 460,
+        height: 720,
+        minWidth: 400,
+        minHeight: 560,
         show: false,
         title: 'Sign in to YouTube Music',
         parent: parent ?? undefined,
@@ -1105,17 +1198,25 @@ class AuthService {
       })
 
       this.loginWindow = loginWindow
-      ses.setUserAgent(loginUserAgent())
-      loginWindow.webContents.setUserAgent(loginUserAgent())
+      loginWindow.webContents.setUserAgent(userAgent)
 
       loginWindow.once('ready-to-show', () => loginWindow.show())
+
       loginWindow.on('closed', () => {
         void ses.cookies
           .get({ url: AUTH_COOKIE_URL })
           .then((cookies) => {
-            finish(hasAuthCookies(cookies) && cookieFingerprint(cookies) !== initialFingerprint)
+            if (this.cancelRequested) {
+              finish('canceled')
+              return
+            }
+            finish(
+              hasCompleteAuthSession(cookies) && cookieFingerprint(cookies) !== initialFingerprint
+                ? 'signed-in'
+                : 'canceled'
+            )
           })
-          .catch(() => finish(false))
+          .catch(() => finish('canceled'))
       })
 
       loginWindow.webContents.on(
@@ -1136,17 +1237,85 @@ class AuthService {
         }
       )
 
-      loginWindow.webContents.on('did-finish-load', () => {
-        const loadedUrl = loginWindow.webContents.getURL()
-        if (retryLoad && loadedUrl.startsWith('http')) {
+      // Google accepted the login once it redirects to YouTube Music. Stop
+      // showing the web app immediately; the cookie watcher closes the window
+      // a moment later.
+      loginWindow.webContents.on('did-navigate', (_event, url) => {
+        if (retryLoad && url.startsWith('http')) {
           clearTimeout(retryLoad)
           retryLoad = undefined
         }
+
+        if (settled || !isMusicYouTubeUrl(url)) return
+        if (loginWindow.isDestroyed() || !loginWindow.isVisible()) return
+
+        loginWindow.hide()
+        revealTimer = setTimeout(() => {
+          revealTimer = undefined
+          if (!settled && !loginWindow.isDestroyed()) loginWindow.show()
+        }, EMBEDDED_REVEAL_MS)
       })
 
+      const checkForBlockPage = (): void => {
+        if (settled || blocked) return
+
+        try {
+          if (!new URL(loginWindow.webContents.getURL()).hostname.endsWith('.google.com')) return
+        } catch {
+          return
+        }
+
+        // Give the page a beat to render; the interstitial text arrives late.
+        setTimeout(() => {
+          if (settled || blocked || loginWindow.isDestroyed()) return
+          void loginWindow.webContents
+            .executeJavaScript('document.body ? document.body.innerText : ""', true)
+            .then((text) => {
+              if (settled || blocked || typeof text !== 'string') return
+              if (!BLOCK_MESSAGE_PATTERNS.some((pattern) => pattern.test(text))) return
+              blocked = true
+              console.warn('[auth] Google refused sign-in in the in-app window')
+              finish('blocked')
+            })
+            .catch(() => undefined)
+        }, 600)
+      }
+
+      loginWindow.webContents.on('did-finish-load', () => checkForBlockPage())
+
+      // Google's flow sometimes opens a popup (account chooser, security
+      // prompts). Keep those inside the auth session instead of throwing the
+      // user to an external browser.
       loginWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (isAuthHostUrl(url)) {
+          return {
+            action: 'allow',
+            overrideBrowserWindowOptions: {
+              parent: loginWindow,
+              autoHideMenuBar: true,
+              width: 480,
+              height: 640
+            }
+          }
+        }
         void shell.openExternal(url)
         return { action: 'deny' }
+      })
+
+      loginWindow.webContents.on('did-create-window', (childWindow) => {
+        childWindow.webContents.setUserAgent(userAgent)
+        childWindow.webContents.setWindowOpenHandler(({ url }) => {
+          void shell.openExternal(url)
+          return { action: 'deny' }
+        })
+      })
+
+      // Keep the user inside Google's flow; anything else goes to the system
+      // browser.
+      loginWindow.webContents.on('will-navigate', (event, url) => {
+        if (isAuthHostUrl(url)) return
+        event.preventDefault()
+        void shell.openExternal(url)
       })
 
       const poll = setInterval(() => {
@@ -1155,16 +1324,17 @@ class AuthService {
         void ses.cookies
           .get({ url: AUTH_COOKIE_URL })
           .then((cookies) => {
-            if (settled || !hasAuthCookies(cookies)) return
+            if (settled || !hasCompleteAuthSession(cookies)) return
             if (cookieFingerprint(cookies) === initialFingerprint) return
+            if (settleTimer) return
 
             void ses.cookies.flushStore().catch(() => undefined)
-            finish(true)
+            settleTimer = setTimeout(() => finish('signed-in'), EMBEDDED_SETTLE_MS)
           })
           .catch(() => undefined)
       }, COOKIE_POLL_MS)
 
-      const timeout = setTimeout(() => finish(false), LOGIN_TIMEOUT_MS)
+      const timeout = setTimeout(() => finish('canceled'), LOGIN_TIMEOUT_MS)
 
       // The loadURL promise can reject even when Chromium retries the request
       // and ultimately succeeds, so keep the window open and rely on the

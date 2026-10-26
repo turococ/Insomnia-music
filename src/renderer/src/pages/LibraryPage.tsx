@@ -113,9 +113,8 @@ function SignedOutLibrary({
         <Library className="mx-auto size-7 text-faint" />
         <h2 className="mt-4 text-base font-semibold">Your music, in one place</h2>
         <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-muted">
-          ToneGlass opens Google&apos;s sign-in page in your browser. Your password stays with
-          Google; only the YouTube Music session is imported. If no supported browser is found, a
-          secure built-in window is used instead.
+          Sign-in happens in a secure ToneGlass window. Your password stays with Google; only the
+          YouTube Music session is stored on this device.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
           <button
@@ -143,7 +142,8 @@ function SignedOutLibrary({
         </div>
         {signingIn && (
           <p className="mt-3 text-[10px] text-faint">
-            Finish in the browser window; the session can take up to 30 seconds to save.
+            Finish signing in in the ToneGlass window; it closes itself once the account is
+            connected.
           </p>
         )}
         <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-faint">

@@ -86,6 +86,14 @@ export interface AuthStatus {
   account?: AccountProfile
 }
 
+/** How a sign-in attempt ended. `blocked` means Google refused the in-app window. */
+export type SignInOutcome = 'signed-in' | 'canceled' | 'blocked'
+
+export interface SignInResult {
+  status: AuthStatus
+  outcome: SignInOutcome
+}
+
 export type SearchTopActionKind = 'shuffle' | 'mix'
 
 export interface SearchTopAction {
@@ -143,7 +151,8 @@ export interface AppApi {
   }
   auth: {
     status: () => Promise<AuthStatus>
-    signIn: () => Promise<AuthStatus>
+    signIn: () => Promise<SignInResult>
+    signInWithBrowser: () => Promise<SignInResult>
     cancelSignIn: () => Promise<void>
     signOut: () => Promise<AuthStatus>
   }
