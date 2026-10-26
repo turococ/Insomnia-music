@@ -10,6 +10,7 @@ import {
   Sparkles,
   UserRound
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '@renderer/features/auth/context'
 import { cn } from '@renderer/lib/cn'
@@ -26,6 +27,20 @@ export function Sidebar(): React.JSX.Element {
   const { status, isLoading, isPending, signIn, cancelSignIn, signOut } = useAuth()
   const account = status?.account
   const authenticated = Boolean(status?.authenticated)
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    window.api.app
+      .version()
+      .then((value) => {
+        if (!cancelled) setVersion(value)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-line/80 bg-surface/50 px-4 pb-4 pt-6">
@@ -83,7 +98,7 @@ export function Sidebar(): React.JSX.Element {
         </div>
         <div className="space-y-2 text-[12px] text-muted">
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
-            Synced lyrics
+            Library actions
           </div>
           <div className="rounded-xl border border-line/70 bg-canvas/40 px-3 py-2.5">
             Offline downloads
@@ -158,7 +173,9 @@ export function Sidebar(): React.JSX.Element {
         </div>
       )}
 
-      <div className="mt-4 px-2 text-[10px] text-faint">ToneGlass 0.1.0 · unofficial client</div>
+      <div className="mt-4 px-2 text-[10px] text-faint">
+        ToneGlass {version || '…'} · unofficial client
+      </div>
     </aside>
   )
 }

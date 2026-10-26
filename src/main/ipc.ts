@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   AuthStatus,
@@ -11,6 +11,8 @@ import type {
 } from '@shared/types'
 import { authService } from './auth'
 import { mediaProxy } from './media-proxy'
+import { getSettings, resetSettings, updateSettings } from './settings'
+import { checkForUpdates, downloadUpdate, getUpdateState, installUpdate } from './updater'
 import { musicService } from './yt/music'
 
 const COLLECTION_KINDS: CollectionKind[] = ['album', 'playlist', 'artist']
@@ -207,4 +209,27 @@ export function registerIpc(): void {
       url: await mediaProxy.urlFor(id)
     }
   })
+
+  ipcMain.handle(IPC.settingsGet, () => getSettings())
+
+  ipcMain.handle(IPC.settingsUpdate, (_event, patch: unknown) => {
+    const previous = getSettings()
+    const next = updateSettings(patch)
+    if (next.audioQuality !== previous.audioQuality) musicService.clearSourceCache()
+    return next
+  })
+
+  ipcMain.handle(IPC.settingsReset, () => {
+    const previous = getSettings()
+    const next = resetSettings()
+    if (next.audioQuality !== previous.audioQuality) musicService.clearSourceCache()
+    return next
+  })
+
+  ipcMain.handle(IPC.appVersion, () => app.getVersion())
+
+  ipcMain.handle(IPC.updatesStatus, () => getUpdateState())
+  ipcMain.handle(IPC.updatesCheck, () => checkForUpdates())
+  ipcMain.handle(IPC.updatesDownload, () => downloadUpdate())
+  ipcMain.handle(IPC.updatesInstall, () => installUpdate())
 }

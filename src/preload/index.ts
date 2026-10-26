@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import { IPC } from '../shared/ipc'
 import type { AppApi } from '../shared/types'
@@ -30,6 +30,32 @@ const api: AppApi = {
   },
   playback: {
     resolve: (videoId) => ipcRenderer.invoke(IPC.playbackResolve, videoId)
+  },
+  settings: {
+    get: () => ipcRenderer.invoke(IPC.settingsGet),
+    update: (patch) => ipcRenderer.invoke(IPC.settingsUpdate, patch),
+    reset: () => ipcRenderer.invoke(IPC.settingsReset)
+  },
+  app: {
+    version: () => ipcRenderer.invoke(IPC.appVersion),
+    onPlayerCommand: (callback) => {
+      const listener = (_event: IpcRendererEvent, command: Parameters<typeof callback>[0]): void =>
+        callback(command)
+      ipcRenderer.on(IPC.playerCommand, listener)
+      return () => ipcRenderer.removeListener(IPC.playerCommand, listener)
+    }
+  },
+  updates: {
+    status: () => ipcRenderer.invoke(IPC.updatesStatus),
+    check: () => ipcRenderer.invoke(IPC.updatesCheck),
+    download: () => ipcRenderer.invoke(IPC.updatesDownload),
+    install: () => ipcRenderer.invoke(IPC.updatesInstall),
+    onChange: (callback) => {
+      const listener = (_event: IpcRendererEvent, state: Parameters<typeof callback>[0]): void =>
+        callback(state)
+      ipcRenderer.on(IPC.updatesChanged, listener)
+      return () => ipcRenderer.removeListener(IPC.updatesChanged, listener)
+    }
   }
 }
 

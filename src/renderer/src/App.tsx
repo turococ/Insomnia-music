@@ -33,6 +33,15 @@ function App(): React.JSX.Element {
     setVolume(volume)
   }, [])
 
+  useEffect(() => {
+    return window.api.app.onPlayerCommand((command) => {
+      const player = usePlayer.getState()
+      if (command === 'toggle') player.toggle()
+      else if (command === 'next') player.next()
+      else player.previous()
+    })
+  }, [])
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
       <div className="flex min-h-0 flex-1">

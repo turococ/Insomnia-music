@@ -17,5 +17,15 @@ export const IPC = {
   authSignIn: 'auth:sign-in',
   authCancel: 'auth:cancel',
   authSignOut: 'auth:sign-out',
-  playbackResolve: 'playback:resolve'
+  playbackResolve: 'playback:resolve',
+  settingsGet: 'settings:get',
+  settingsUpdate: 'settings:update',
+  settingsReset: 'settings:reset',
+  appVersion: 'app:version',
+  playerCommand: 'player:command',
+  updatesStatus: 'updates:status',
+  updatesChanged: 'updates:changed',
+  updatesCheck: 'updates:check',
+  updatesDownload: 'updates:download',
+  updatesInstall: 'updates:install'
 } as const

@@ -4,6 +4,7 @@ import type {
   AccountProfile,
   AlbumRef,
   ArtistRef,
+  AudioQuality,
   CollectionData,
   CollectionKind,
   CollectionSection,
@@ -27,6 +28,7 @@ import type {
 } from '@shared/types'
 import { authService } from '../auth'
 import { fetchLrclibLyrics } from '../lyrics'
+import { getSettings } from '../settings'
 import { APP_USER_AGENT } from './constants'
 import { poTokenProvider } from './po-token'
 
@@ -1512,25 +1514,33 @@ class MusicService {
   }
 
   async resolve(videoId: string, force = false): Promise<PlaybackSource> {
+    const quality = getSettings().audioQuality
+    const cacheKey = `${videoId}:${quality}`
+
     if (force) {
-      this.sourceCache.delete(videoId)
-      this.pendingSources.delete(videoId)
+      this.sourceCache.delete(cacheKey)
+      this.pendingSources.delete(cacheKey)
     }
 
-    const cached = this.sourceCache.get(videoId)
+    const cached = this.sourceCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) return cached.source
 
-    const pending = this.pendingSources.get(videoId)
+    const pending = this.pendingSources.get(cacheKey)
     if (pending) return pending
 
-    const promise = this.resolveUncached(videoId).finally(() => {
-      this.pendingSources.delete(videoId)
+    const promise = this.resolveUncached(videoId, quality).finally(() => {
+      this.pendingSources.delete(cacheKey)
     })
-    this.pendingSources.set(videoId, promise)
+    this.pendingSources.set(cacheKey, promise)
     return promise
   }
 
-  private async resolveUncached(videoId: string): Promise<PlaybackSource> {
+  clearSourceCache(): void {
+    this.sourceCache.clear()
+    this.pendingSources.clear()
+  }
+
+  private async resolveUncached(videoId: string, quality: AudioQuality): Promise<PlaybackSource> {
     const yt = await this.getYt()
     const errors: string[] = []
 
@@ -1542,7 +1552,7 @@ class MusicService {
           continue
         }
 
-        const format = this.chooseAudioFormat(info)
+        const format = this.chooseAudioFormat(info, quality)
         let url = await format.decipher(yt.session.player)
         if (!url) {
           errors.push(`${client}: empty URL`)
@@ -1586,13 +1596,29 @@ class MusicService {
     throw new Error(`Could not resolve playback for ${videoId}. ${errors.join(' | ')}`)
   }
 
-  private chooseAudioFormat(info: Awaited<ReturnType<Innertube['getInfo']>>): Misc.Format {
+  private chooseAudioFormat(
+    info: Awaited<ReturnType<Innertube['getInfo']>>,
+    quality: AudioQuality
+  ): Misc.Format {
+    // 'best' keeps the highest bitrate; 'bestefficiency' makes chooseFormat
+    // sort audio formats ascending, so it doubles as the data-saver mode.
+    const youtubeQuality = quality === 'data-saver' ? 'bestefficiency' : 'best'
+
     try {
       // Electron's bundled Chromium may not decode AAC. Opus in WebM is
       // universally supported and usually has the best available bitrate too.
-      return info.chooseFormat({ type: 'audio', quality: 'best', codec: 'opus', format: 'webm' })
+      return info.chooseFormat({
+        type: 'audio',
+        quality: youtubeQuality,
+        codec: 'opus',
+        format: 'webm'
+      })
     } catch {
-      return info.chooseFormat({ type: 'audio', quality: 'best' })
+      try {
+        return info.chooseFormat({ type: 'audio', quality: youtubeQuality })
+      } catch {
+        return info.chooseFormat({ type: 'audio', quality: 'bestefficiency' })
+      }
     }
   }
 

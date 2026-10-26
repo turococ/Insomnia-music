@@ -153,6 +153,37 @@ export interface LyricsResult {
   instrumental: boolean
 }
 
+export type AudioQuality = 'best' | 'data-saver'
+export type AccentId = 'lime' | 'violet' | 'cyan' | 'coral' | 'amber'
+
+export interface AppSettings {
+  audioQuality: AudioQuality
+  accent: AccentId
+  customCss: string
+  closeToTray: boolean
+  launchAtStartup: boolean
+  autoUpdate: boolean
+}
+
+export type PlayerCommand = 'toggle' | 'next' | 'previous'
+
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'up-to-date'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+  | 'unsupported'
+
+export interface UpdateState {
+  status: UpdateStatus
+  version?: string
+  percent?: number
+  message?: string
+}
+
 export interface AppApi {
   music: {
     home: (filter?: string) => Promise<HomeData>
@@ -180,5 +211,21 @@ export interface AppApi {
   }
   playback: {
     resolve: (videoId: string) => Promise<PlaybackSource>
+  }
+  settings: {
+    get: () => Promise<AppSettings>
+    update: (patch: Partial<AppSettings>) => Promise<AppSettings>
+    reset: () => Promise<AppSettings>
+  }
+  app: {
+    version: () => Promise<string>
+    onPlayerCommand: (callback: (command: PlayerCommand) => void) => () => void
+  }
+  updates: {
+    status: () => Promise<UpdateState>
+    check: () => Promise<UpdateState>
+    download: () => Promise<UpdateState>
+    install: () => Promise<void>
+    onChange: (callback: (state: UpdateState) => void) => () => void
   }
 }
