@@ -4,6 +4,7 @@ import type { CollectionKind } from '@shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { PlayerBar } from './features/player/PlayerBar'
+import { PlayerHotkeys } from './features/player/PlayerHotkeys'
 import { QueuePanel } from './features/player/QueuePanel'
 import { TrackContextMenu } from './features/player/TrackContextMenu'
 import { usePlayer } from './features/player/store'
@@ -11,6 +12,7 @@ import { HomePage } from './pages/HomePage'
 import { LibraryPage } from './pages/LibraryPage'
 import { ArtistSongsPage } from './pages/ArtistSongsPage'
 import { CollectionPage } from './pages/CollectionPage'
+import { NowPlayingPage } from './pages/NowPlayingPage'
 import { SearchPage } from './pages/SearchPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -44,6 +46,7 @@ function App(): React.JSX.Element {
               <Route path="/search" element={<SearchPage />} />
               <Route path="/album/:id" element={<CollectionRoute kind="album" />} />
               <Route path="/playlist/:id" element={<CollectionRoute kind="playlist" />} />
+              <Route path="/now-playing" element={<NowPlayingPage />} />
               <Route path="/artist/:id/songs" element={<ArtistSongsRoute />} />
               <Route path="/artist/:id" element={<CollectionRoute kind="artist" />} />
               <Route path="/library" element={<LibraryPage />} />
@@ -55,6 +58,7 @@ function App(): React.JSX.Element {
       <PlayerBar />
       <QueuePanel />
       <TrackContextMenu />
+      <PlayerHotkeys />
     </div>
   )
 }

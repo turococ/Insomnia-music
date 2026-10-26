@@ -145,6 +145,8 @@ export interface AppApi {
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (id: string) => Promise<string | null>
     upNext: (videoId: string, automix?: boolean) => Promise<MediaItem[]>
+    likeStatus: (id: string) => Promise<boolean>
+    setLiked: (id: string, liked: boolean) => Promise<boolean>
   }
   library: {
     list: (kind: LibraryListKind) => Promise<LibraryListData>

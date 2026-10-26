@@ -2,6 +2,7 @@ import {
   Heart,
   ListMusic,
   Loader2,
+  Maximize2,
   Pause,
   Play,
   Repeat,
@@ -12,8 +13,11 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { cn } from '@renderer/lib/cn'
 import { formatTime, itemSubtitle, pickThumbnail } from '@renderer/lib/media'
+import { useAuth } from '@renderer/features/auth/context'
 import { usePlayer } from '@renderer/features/player/store'
 
 export function PlayerBar(): React.JSX.Element {
@@ -28,7 +32,11 @@ export function PlayerBar(): React.JSX.Element {
   const repeat = usePlayer((state) => state.repeat)
   const shuffle = usePlayer((state) => state.shuffle)
   const queueOpen = usePlayer((state) => state.queueOpen)
+  const liked = usePlayer((state) => state.liked)
+  const likePending = usePlayer((state) => state.likePending)
   const error = usePlayer((state) => state.error)
+  const { status } = useAuth()
+  const authenticated = Boolean(status?.authenticated)
 
   const toggle = usePlayer((state) => state.toggle)
   const next = usePlayer((state) => state.next)
@@ -39,6 +47,16 @@ export function PlayerBar(): React.JSX.Element {
   const toggleShuffle = usePlayer((state) => state.toggleShuffle)
   const cycleRepeat = usePlayer((state) => state.cycleRepeat)
   const toggleQueue = usePlayer((state) => state.toggleQueue)
+  const toggleLike = usePlayer((state) => state.toggleLike)
+  const refreshLike = usePlayer((state) => state.refreshLike)
+  const wasAuthenticated = useRef(authenticated)
+
+  useEffect(() => {
+    // Refresh the like status when a session becomes available, since the
+    // status fetched before sign-in was necessarily "not liked".
+    if (authenticated && !wasAuthenticated.current) void refreshLike(true)
+    wasAuthenticated.current = authenticated
+  }, [authenticated, refreshLike])
 
   const cover = current ? pickThumbnail(current.thumbnails, 160) : undefined
   const RepeatIcon = repeat === 'one' ? Repeat1 : Repeat
@@ -46,38 +64,58 @@ export function PlayerBar(): React.JSX.Element {
   return (
     <footer className="relative z-20 grid h-[92px] shrink-0 grid-cols-[minmax(0,1fr)_minmax(360px,1.35fr)_minmax(0,1fr)] items-center gap-6 border-t border-line/80 bg-surface/85 px-6 backdrop-blur-xl">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="relative size-14 shrink-0 overflow-hidden rounded-xl border border-line/70 bg-surface-2">
-          {cover ? (
-            <img src={cover} alt="" draggable={false} className="size-full object-cover" />
-          ) : (
-            <div className="grid size-full place-items-center text-faint">
-              <ListMusic className="size-5" />
-            </div>
-          )}
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="truncate text-[13px] font-medium text-ink">
-              {current?.title ?? 'Nothing playing'}
-            </div>
-            {isLive && (
-              <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-red-300">
-                <span className="size-1 rounded-full bg-red-400" />
-                Live
-              </span>
+        <Link
+          to="/now-playing"
+          title="Open now playing"
+          className="flex min-w-0 items-center gap-3 rounded-lg outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+        >
+          <div className="relative size-14 shrink-0 overflow-hidden rounded-xl border border-line/70 bg-surface-2">
+            {cover ? (
+              <img src={cover} alt="" draggable={false} className="size-full object-cover" />
+            ) : (
+              <div className="grid size-full place-items-center text-faint">
+                <ListMusic className="size-5" />
+              </div>
             )}
           </div>
-          <div className={cn('mt-0.5 truncate text-[11px]', error ? 'text-red-400' : 'text-faint')}>
-            {error ?? (current ? itemSubtitle(current) : 'Pick a track to start listening')}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="truncate text-[13px] font-medium text-ink">
+                {current?.title ?? 'Nothing playing'}
+              </div>
+              {isLive && (
+                <span className="flex shrink-0 items-center gap-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-widest text-red-300">
+                  <span className="size-1 rounded-full bg-red-400" />
+                  Live
+                </span>
+              )}
+            </div>
+            <div
+              className={cn('mt-0.5 truncate text-[11px]', error ? 'text-red-400' : 'text-faint')}
+            >
+              {error ?? (current ? itemSubtitle(current) : 'Pick a track to start listening')}
+            </div>
           </div>
-        </div>
+        </Link>
         <button
           type="button"
-          disabled={!current}
-          className="ml-1 hidden size-8 shrink-0 place-items-center rounded-full text-faint transition hover:bg-surface-2 hover:text-ink disabled:opacity-30 sm:grid"
-          aria-label="Like"
+          onClick={() => void toggleLike()}
+          disabled={!current || likePending || !authenticated}
+          aria-label={liked ? 'Remove from liked songs' : 'Like'}
+          aria-pressed={liked}
+          title={
+            !authenticated
+              ? 'Sign in to like songs'
+              : liked
+                ? 'Remove from liked songs (L)'
+                : 'Like (L)'
+          }
+          className={cn(
+            'ml-1 hidden size-8 shrink-0 place-items-center rounded-full transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-30 sm:grid',
+            liked ? 'text-accent' : 'text-faint hover:text-ink'
+          )}
         >
-          <Heart className="size-4" />
+          <Heart className={cn('size-4', liked && 'fill-current')} />
         </button>
       </div>
 
@@ -87,6 +125,7 @@ export function PlayerBar(): React.JSX.Element {
             type="button"
             onClick={toggleShuffle}
             aria-label="Shuffle"
+            title="Shuffle (S)"
             className={cn(
               'grid size-8 place-items-center rounded-full transition hover:text-ink',
               shuffle ? 'text-accent' : 'text-faint'
@@ -100,6 +139,7 @@ export function PlayerBar(): React.JSX.Element {
             onClick={previous}
             disabled={!current}
             aria-label="Previous"
+            title="Previous (Shift+←)"
             className="grid size-8 place-items-center rounded-full text-muted transition hover:text-ink disabled:opacity-30"
           >
             <SkipBack className="size-[18px] fill-current" />
@@ -110,6 +150,7 @@ export function PlayerBar(): React.JSX.Element {
             onClick={toggle}
             disabled={!current}
             aria-label={isPlaying ? 'Pause' : 'Play'}
+            title="Play / pause (Space)"
             className="grid size-11 place-items-center rounded-full bg-accent text-accent-ink shadow-[0_0_28px_-6px] shadow-accent/70 transition hover:scale-105 hover:bg-accent-soft disabled:opacity-40"
           >
             {isLoading ? (
@@ -126,6 +167,7 @@ export function PlayerBar(): React.JSX.Element {
             onClick={next}
             disabled={!current}
             aria-label="Next"
+            title="Next (Shift+→)"
             className="grid size-8 place-items-center rounded-full text-muted transition hover:text-ink disabled:opacity-30"
           >
             <SkipForward className="size-[18px] fill-current" />
@@ -135,6 +177,7 @@ export function PlayerBar(): React.JSX.Element {
             type="button"
             onClick={cycleRepeat}
             aria-label="Repeat"
+            title="Repeat (R)"
             className={cn(
               'grid size-8 place-items-center rounded-full transition hover:text-ink',
               repeat === 'off' ? 'text-faint' : 'text-accent'
@@ -166,11 +209,20 @@ export function PlayerBar(): React.JSX.Element {
       </div>
 
       <div className="flex items-center justify-end gap-2">
+        <Link
+          to="/now-playing"
+          aria-label="Open now playing"
+          title="Open now playing"
+          className="grid size-8 place-items-center rounded-full text-faint transition hover:bg-surface-2 hover:text-ink"
+        >
+          <Maximize2 className="size-[15px]" />
+        </Link>
         <button
           type="button"
           onClick={toggleQueue}
           aria-label="Queue"
           aria-pressed={queueOpen}
+          title="Queue (Q)"
           className={cn(
             'grid size-8 place-items-center rounded-full transition',
             queueOpen ? 'bg-accent/10 text-accent' : 'text-faint hover:bg-surface-2 hover:text-ink'
@@ -182,6 +234,7 @@ export function PlayerBar(): React.JSX.Element {
           type="button"
           onClick={toggleMute}
           aria-label={muted ? 'Unmute' : 'Mute'}
+          title={muted ? 'Unmute (M)' : 'Mute (M)'}
           className="grid size-8 place-items-center rounded-full text-faint transition hover:bg-surface-2 hover:text-ink"
         >
           {muted || volume === 0 ? (

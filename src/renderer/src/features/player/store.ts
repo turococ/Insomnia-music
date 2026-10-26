@@ -25,6 +25,8 @@ interface PlayerState {
   shuffle: boolean
   autoplay: boolean
   queueOpen: boolean
+  liked: boolean
+  likePending: boolean
   error: string | null
   playTrack: (track: MediaItem, queue?: MediaItem[], source?: QueueSource) => Promise<void>
   playQueue: (queue: MediaItem[], index: number, source?: QueueSource | null) => Promise<void>
@@ -39,6 +41,8 @@ interface PlayerState {
   toggleQueue: () => void
   setQueueOpen: (open: boolean) => void
   setAutoplay: (enabled: boolean) => void
+  refreshLike: (force?: boolean) => Promise<void>
+  toggleLike: () => Promise<void>
   toggle: () => void
   next: () => void
   previous: () => void
@@ -53,6 +57,9 @@ interface PlayerState {
 let audio: HTMLAudioElement | null = null
 let mediaSessionReady = false
 let extendingQueue = false
+// Like state is not persisted; remember it for the session so switching
+// between tracks does not refetch the same status repeatedly.
+const likedTracks = new Map<string, boolean>()
 
 function isPlayable(item: MediaItem): boolean {
   return item.kind === 'song' || item.kind === 'video'
@@ -207,6 +214,8 @@ export const usePlayer = create<PlayerState>()(
       shuffle: false,
       autoplay: true,
       queueOpen: false,
+      liked: false,
+      likePending: false,
       error: null,
 
       playTrack: async (track, queue, source) => {
@@ -241,11 +250,13 @@ export const usePlayer = create<PlayerState>()(
           error: null
         })
 
+        void get().refreshLike()
+
         try {
-          const source = await window.api.playback.resolve(track.id)
-          player.src = source.url
+          const resolved = await window.api.playback.resolve(track.id)
+          player.src = resolved.url
           player.currentTime = 0
-          if (source.isLive) set({ isLive: true, duration: 0, progress: 0 })
+          if (resolved.isLive) set({ isLive: true, duration: 0, progress: 0 })
           await player.play()
           updateMediaSession(track)
           set({ isPlaying: true })
@@ -387,6 +398,49 @@ export const usePlayer = create<PlayerState>()(
       setQueueOpen: (open) => set({ queueOpen: open }),
 
       setAutoplay: (enabled) => set({ autoplay: enabled }),
+
+      refreshLike: async (force = false) => {
+        const current = get().current
+        if (!current) {
+          set({ liked: false })
+          return
+        }
+
+        const cached = likedTracks.get(current.id)
+        if (!force && cached !== undefined) {
+          set({ liked: cached })
+          return
+        }
+
+        set({ liked: false })
+        try {
+          const liked = await window.api.music.likeStatus(current.id)
+          likedTracks.set(current.id, liked)
+          if (get().current?.id === current.id) set({ liked })
+        } catch {
+          // A missing like status is not worth interrupting playback.
+        }
+      },
+
+      toggleLike: async () => {
+        const current = get().current
+        if (!current || get().likePending) return
+
+        const next = !get().liked
+        set({ liked: next, likePending: true, error: null })
+
+        try {
+          const liked = await window.api.music.setLiked(current.id, next)
+          likedTracks.set(current.id, liked)
+          if (get().current?.id === current.id) set({ liked })
+        } catch (error) {
+          if (get().current?.id === current.id) {
+            set({ liked: !next, error: formatError(error) })
+          }
+        } finally {
+          set({ likePending: false })
+        }
+      },
 
       toggle: () => {
         const { current, queue, queueIndex, queueSource } = get()

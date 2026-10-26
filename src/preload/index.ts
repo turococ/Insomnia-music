@@ -14,7 +14,9 @@ const api: AppApi = {
     albumYears: (ids) => ipcRenderer.invoke(IPC.musicAlbumYears, ids),
     track: (id) => ipcRenderer.invoke(IPC.musicTrack, id),
     lyrics: (id) => ipcRenderer.invoke(IPC.musicLyrics, id),
-    upNext: (videoId, automix) => ipcRenderer.invoke(IPC.musicUpNext, videoId, automix)
+    upNext: (videoId, automix) => ipcRenderer.invoke(IPC.musicUpNext, videoId, automix),
+    likeStatus: (id) => ipcRenderer.invoke(IPC.musicLikeStatus, id),
+    setLiked: (id, liked) => ipcRenderer.invoke(IPC.musicSetLiked, id, liked)
   },
   library: {
     list: (kind) => ipcRenderer.invoke(IPC.libraryList, kind),

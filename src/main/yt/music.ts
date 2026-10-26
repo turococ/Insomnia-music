@@ -1450,6 +1450,31 @@ class MusicService {
     }
   }
 
+  async likeStatus(id: string): Promise<boolean> {
+    try {
+      const music = await this.music()
+      const info = await music.getInfo(id)
+      return Boolean(info.basic_info.is_liked)
+    } catch {
+      return false
+    }
+  }
+
+  async setLiked(id: string, liked: boolean): Promise<boolean> {
+    if (!(await this.isSignedIn())) {
+      throw new Error('Sign in to save liked songs.')
+    }
+
+    const yt = await this.getYt()
+    if (liked) {
+      await yt.interact.like(id)
+    } else {
+      await yt.interact.removeRating(id)
+    }
+
+    return liked
+  }
+
   async resolve(videoId: string, force = false): Promise<PlaybackSource> {
     if (force) {
       this.sourceCache.delete(videoId)

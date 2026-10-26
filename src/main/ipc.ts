@@ -142,6 +142,14 @@ export function registerIpc(): void {
     musicService.upNext(requireString(id, 'track id', 200), automix === true)
   )
 
+  ipcMain.handle(IPC.musicLikeStatus, (_event, id: unknown) =>
+    musicService.likeStatus(requireString(id, 'track id', 200))
+  )
+
+  ipcMain.handle(IPC.musicSetLiked, (_event, id: unknown, liked: unknown) =>
+    musicService.setLiked(requireString(id, 'track id', 200), liked === true)
+  )
+
   ipcMain.handle(IPC.libraryList, (_event, kind: unknown) =>
     musicService.libraryList(requireLibraryKind(kind))
   )
