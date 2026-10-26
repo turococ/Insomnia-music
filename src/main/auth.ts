@@ -420,19 +420,13 @@ async function clearBrowserSingletonFiles(profileDir: string): Promise<void> {
   }
 }
 
-// Google's account flow rejects requests it can tie to Electron with
-// "This browser or app may not be secure". The in-app sign-in window always
-// presents a clean Chrome user agent that matches the embedded engine.
+// Google's account flow punishes embedded browsers that impersonate Chrome:
+// a plain Chrome user agent produced "This browser or app may not be secure"
+// (the same behaviour was confirmed for Electron apps in 2026). What Google
+// accepts is the native Electron user agent with only the Electron token
+// removed, so the app identifies itself and matches its embedded engine.
 function loginUserAgent(): string {
-  const platform =
-    process.platform === 'win32'
-      ? 'Windows NT 10.0; Win64; x64'
-      : process.platform === 'linux'
-        ? 'X11; Linux x86_64'
-        : 'Macintosh; Intel Mac OS X 10_15_7'
-  const chromeVersion = process.versions.chrome ?? '140.0.0.0'
-
-  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+  return app.userAgentFallback.replace(/Electron\/\S+\s?/, '')
 }
 
 function browserCandidates(): BrowserCandidate[] {
@@ -1170,6 +1164,7 @@ class AuthService {
         if (settled) return
         settled = true
         clearInterval(poll)
+        clearInterval(blockScanner)
         clearTimeout(timeout)
         if (retryLoad) clearTimeout(retryLoad)
         if (settleTimer) clearTimeout(settleTimer)
@@ -1256,32 +1251,43 @@ class AuthService {
         }, EMBEDDED_REVEAL_MS)
       })
 
-      const checkForBlockPage = (): void => {
-        if (settled || blocked) return
+      // The block interstitial can arrive long after the initial load and
+      // inside a child frame, so scan repeatedly instead of hooking a single
+      // load event.
+      let scanInFlight = false
+      const scanForBlockPage = async (): Promise<void> => {
+        if (settled || blocked || scanInFlight || loginWindow.isDestroyed()) return
 
         try {
-          if (!new URL(loginWindow.webContents.getURL()).hostname.endsWith('.google.com')) return
+          const { hostname } = new URL(loginWindow.webContents.getURL())
+          if (!hostname.endsWith('.google.com')) return
         } catch {
           return
         }
 
-        // Give the page a beat to render; the interstitial text arrives late.
-        setTimeout(() => {
-          if (settled || blocked || loginWindow.isDestroyed()) return
-          void loginWindow.webContents
-            .executeJavaScript('document.body ? document.body.innerText : ""', true)
-            .then((text) => {
-              if (settled || blocked || typeof text !== 'string') return
-              if (!BLOCK_MESSAGE_PATTERNS.some((pattern) => pattern.test(text))) return
-              blocked = true
-              console.warn('[auth] Google refused sign-in in the in-app window')
-              finish('blocked')
-            })
-            .catch(() => undefined)
-        }, 600)
+        scanInFlight = true
+        try {
+          const texts = await Promise.all(
+            loginWindow.webContents.mainFrame.framesInSubtree.map((frame) =>
+              frame
+                .executeJavaScript('document.body ? document.body.innerText : ""')
+                .catch(() => '')
+            )
+          )
+          const isBlocked = texts.some(
+            (text) => typeof text === 'string' && BLOCK_MESSAGE_PATTERNS.some((p) => p.test(text))
+          )
+          if (settled || blocked || !isBlocked) return
+
+          blocked = true
+          console.warn('[auth] Google refused sign-in in the in-app window')
+          finish('blocked')
+        } finally {
+          scanInFlight = false
+        }
       }
 
-      loginWindow.webContents.on('did-finish-load', () => checkForBlockPage())
+      const blockScanner = setInterval(() => void scanForBlockPage(), 1_200)
 
       // Google's flow sometimes opens a popup (account chooser, security
       // prompts). Keep those inside the auth session instead of throwing the
