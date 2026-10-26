@@ -47,15 +47,14 @@ function SearchForm({ initialQuery }: { initialQuery: string }): React.JSX.Eleme
 
 export function TopBar(): React.JSX.Element {
   const navigate = useNavigate()
-  const { status, isLoading, isPending, pendingMode, signIn } = useAuth()
+  const { status, isLoading, isPending, signIn, cancelSignIn } = useAuth()
   const [searchParams] = useSearchParams()
   const authenticated = Boolean(status?.authenticated)
   const account = status?.account
-  const pendingLabel = pendingMode === 'browser' ? 'Waiting for browser…' : 'Signing in…'
   const accountLabel = authenticated
     ? (account?.name ?? 'Account')
     : isPending
-      ? pendingLabel
+      ? 'Cancel sign-in'
       : isLoading
         ? 'Checking…'
         : 'Sign in'
@@ -71,9 +70,10 @@ export function TopBar(): React.JSX.Element {
           type="button"
           onClick={() => {
             if (authenticated) navigate('/library')
+            else if (isPending) void cancelSignIn()
             else void signIn()
           }}
-          disabled={accountBusy}
+          disabled={isLoading}
           className="flex h-9 max-w-[220px] items-center gap-2 rounded-full border border-line/80 bg-surface-2/60 px-3.5 text-[12px] font-medium text-muted transition hover:border-line hover:text-ink disabled:cursor-wait disabled:opacity-70"
         >
           {account?.avatarUrl ? (

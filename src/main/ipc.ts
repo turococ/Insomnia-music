@@ -1,12 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
-import type {
-  AuthMode,
-  AuthStatus,
-  CollectionKind,
-  LibraryListKind,
-  SearchFilter
-} from '@shared/types'
+import type { AuthStatus, CollectionKind, LibraryListKind, SearchFilter } from '@shared/types'
 import { authService } from './auth'
 import { mediaProxy } from './media-proxy'
 import { musicService } from './yt/music'
@@ -14,7 +8,6 @@ import { musicService } from './yt/music'
 const COLLECTION_KINDS: CollectionKind[] = ['album', 'playlist', 'artist']
 const LIBRARY_LIST_KINDS: LibraryListKind[] = ['playlists', 'albums', 'artists']
 const SEARCH_FILTERS: SearchFilter[] = ['all', 'song', 'album', 'artist', 'playlist', 'video']
-const AUTH_MODES: AuthMode[] = ['browser', 'embedded']
 
 function requireSearchFilter(value: unknown): SearchFilter {
   if (value === undefined || value === null) return 'all'
@@ -45,29 +38,20 @@ function requireLibraryKind(value: unknown): LibraryListKind {
   return kind as LibraryListKind
 }
 
-function requireAuthMode(value: unknown): AuthMode {
-  if (value === undefined || value === null) return 'browser'
-
-  const mode = requireString(value, 'sign-in mode', 20)
-  if (!AUTH_MODES.includes(mode as AuthMode)) {
-    throw new Error('Invalid sign-in mode')
-  }
-
-  return mode as AuthMode
-}
-
-async function authStatus(): Promise<AuthStatus> {
+async function authStatus(strict = false): Promise<AuthStatus> {
   if (!(await authService.isAuthenticated())) return { authenticated: false }
 
   try {
     if (!(await musicService.isSignedIn())) return { authenticated: false }
     const account = await musicService.account()
+    if (!account && strict) return { authenticated: false }
     return { authenticated: true, account: account ?? undefined }
   } catch (error) {
     console.warn(
       '[auth] could not validate the saved session:',
       error instanceof Error ? error.message : error
     )
+    if (strict) return { authenticated: false }
     // The cookies are still present. Keep the account connected and let the
     // library surface any network error instead of silently signing out.
     return { authenticated: true }
@@ -143,19 +127,23 @@ export function registerIpc(): void {
 
   ipcMain.handle(IPC.authStatus, () => authStatus())
 
-  ipcMain.handle(IPC.authEnvironment, () => authService.environment())
+  ipcMain.handle(IPC.authCancel, () => authService.cancelSignIn())
 
-  ipcMain.handle(IPC.authSignIn, async (event, mode: unknown) => {
+  ipcMain.handle(IPC.authSignIn, async (event) => {
     const parent = BrowserWindow.fromWebContents(event.sender)
-    const signedIn = await authService.signIn(requireAuthMode(mode), parent)
+    const signedIn = await authService.signIn(parent)
     // Even a cancelled attempt may have cleared an invalid saved session.
     await musicService.reloadSession()
-    const status = await authStatus()
+    // A completed browser handoff must produce a usable account, not merely
+    // a cookie string. This catches a session YouTube Music rejected.
+    const status = await authStatus(true)
 
-    // The browser flow found cookies, but YouTube Music rejected them. Surface
-    // that instead of silently leaving the user signed out.
+    // The browser flow found cookies, but YouTube Music rejected them. Clear
+    // the browser profile so the next attempt starts with a fresh Google
+    // sign-in instead of re-importing the same rejected session.
     if (signedIn && !status.authenticated) {
-      throw new Error('YouTube Music did not accept the browser session. Please try again.')
+      await authService.resetBrowserProfile()
+      throw new Error('YouTube Music did not accept the sign-in session. Please try again.')
     }
 
     return status

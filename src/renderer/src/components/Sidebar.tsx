@@ -23,10 +23,9 @@ const navigation = [
 
 export function Sidebar(): React.JSX.Element {
   const navigate = useNavigate()
-  const { status, isLoading, isPending, pendingMode, signIn, signOut } = useAuth()
+  const { status, isLoading, isPending, signIn, cancelSignIn, signOut } = useAuth()
   const account = status?.account
   const authenticated = Boolean(status?.authenticated)
-  const pendingLabel = pendingMode === 'browser' ? 'Waiting for browser…' : 'Waiting for sign-in…'
 
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-line/80 bg-surface/50 px-4 pb-4 pt-6">
@@ -149,12 +148,12 @@ export function Sidebar(): React.JSX.Element {
           </p>
           <button
             type="button"
-            onClick={() => void signIn()}
-            disabled={isLoading || isPending}
+            onClick={() => (isPending ? void cancelSignIn() : void signIn())}
+            disabled={isLoading}
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-3 py-2 text-[12px] font-semibold text-accent-ink transition hover:bg-accent-soft disabled:cursor-wait disabled:opacity-60"
           >
             {(isLoading || isPending) && <Loader2 className="size-3.5 animate-spin" />}
-            {isPending ? pendingLabel : 'Connect account'}
+            {isPending ? 'Cancel sign-in' : 'Connect account'}
           </button>
         </div>
       )}

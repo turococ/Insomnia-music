@@ -1,14 +1,13 @@
 import { createContext, useContext } from 'react'
-import type { AuthMode, AuthStatus } from '@shared/types'
+import type { AuthStatus } from '@shared/types'
 
 export interface AuthContextValue {
   status?: AuthStatus
   isLoading: boolean
   isPending: boolean
-  pendingMode: AuthMode | null
-  browserName?: string | null
   error: string | null
-  signIn: (mode?: AuthMode) => Promise<void>
+  signIn: () => Promise<void>
+  cancelSignIn: () => Promise<void>
   signOut: () => Promise<void>
   clearError: () => void
 }

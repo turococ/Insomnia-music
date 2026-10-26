@@ -12,7 +12,7 @@ import {
   Users
 } from 'lucide-react'
 import { useState } from 'react'
-import type { AuthMode, LibraryListKind } from '@shared/types'
+import type { LibraryListKind } from '@shared/types'
 import { useAuth } from '@renderer/features/auth/context'
 import { LibraryGrid } from '@renderer/features/library/LibraryGrid'
 import { LikedSongsLibrary } from '@renderer/features/library/LikedSongsLibrary'
@@ -58,50 +58,24 @@ function LibrarySkeleton(): React.JSX.Element {
 
 function SignedOutLibrary({
   signingIn,
-  pendingMode,
-  browserName,
   onSignIn,
-  onEmbeddedSignIn
+  onCancel
 }: {
   signingIn: boolean
-  pendingMode: AuthMode | null
-  browserName: string | null | undefined
   onSignIn: () => void
-  onEmbeddedSignIn: () => void
+  onCancel: () => void
 }): React.JSX.Element {
-  const embeddedOnly = browserName === null
-  const browserLabel = browserName || 'browser'
-  const pendingLabel = pendingMode === 'browser' ? 'Waiting for browser…' : 'Waiting for sign-in…'
-  const primaryLabel = embeddedOnly ? 'Use built-in sign-in' : `Continue in ${browserLabel}`
-
   return (
     <div className="space-y-8 p-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-            <Sparkles className="size-3" />
-            Collection
-          </div>
-          <h1 className="mt-2 text-[30px] font-semibold tracking-[-0.03em]">Your library</h1>
-          <p className="mt-1 text-[12px] text-faint">
-            Connect YouTube Music to bring your saved music into ToneGlass.
-          </p>
+      <div>
+        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+          <Sparkles className="size-3" />
+          Collection
         </div>
-        <button
-          type="button"
-          onClick={onSignIn}
-          disabled={signingIn}
-          className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-[12px] font-semibold text-accent-ink transition hover:bg-accent-soft disabled:cursor-wait disabled:opacity-60"
-        >
-          {signingIn ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : embeddedOnly ? (
-            <UserRound className="size-3.5" />
-          ) : (
-            <Globe2 className="size-3.5" />
-          )}
-          {signingIn ? pendingLabel : primaryLabel}
-        </button>
+        <h1 className="mt-2 text-[30px] font-semibold tracking-[-0.03em]">Your library</h1>
+        <p className="mt-1 text-[12px] text-faint">
+          Connect YouTube Music to bring your saved music into ToneGlass.
+        </p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -131,7 +105,6 @@ function SignedOutLibrary({
             </div>
             <h2 className="mt-4 text-[14px] font-semibold">{title}</h2>
             <p className="mt-1 text-[11px] leading-relaxed text-faint">{subtitle}</p>
-            <div className="mt-6 text-[11px] font-medium text-faint">Sign in to sync</div>
           </div>
         ))}
       </div>
@@ -140,9 +113,9 @@ function SignedOutLibrary({
         <Library className="mx-auto size-7 text-faint" />
         <h2 className="mt-4 text-base font-semibold">Your music, in one place</h2>
         <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-muted">
-          {embeddedOnly
-            ? "ToneGlass opens Google's sign-in page in a secure window. Your password stays with Google; only the resulting YouTube Music session is stored on this device."
-            : `ToneGlass opens Google's sign-in page in a separate ${browserName ?? 'browser'} window with a temporary profile. Your password stays with Google; only the YouTube Music session is imported, and the temporary browser profile is deleted afterward.`}
+          ToneGlass opens Google&apos;s sign-in page in your browser. Your password stays with
+          Google; only the YouTube Music session is imported. If no supported browser is found, a
+          secure built-in window is used instead.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
           <button
@@ -153,26 +126,26 @@ function SignedOutLibrary({
           >
             {signingIn ? (
               <Loader2 className="size-3.5 animate-spin" />
-            ) : embeddedOnly ? (
-              <UserRound className="size-3.5" />
             ) : (
               <Globe2 className="size-3.5" />
             )}
-            {signingIn ? pendingLabel : 'Connect YouTube Music'}
+            {signingIn ? 'Signing in…' : 'Connect YouTube Music'}
           </button>
-
-          {!embeddedOnly && (
+          {signingIn && (
             <button
               type="button"
-              onClick={onEmbeddedSignIn}
-              disabled={signingIn}
-              className="inline-flex items-center gap-2 rounded-full border border-line bg-surface-2/60 px-5 py-2.5 text-[12px] font-medium text-muted transition hover:border-accent/30 hover:text-ink disabled:cursor-wait disabled:opacity-60"
+              onClick={onCancel}
+              className="rounded-full border border-line px-4 py-2.5 text-[11px] font-medium text-muted transition hover:border-line hover:text-ink"
             >
-              <UserRound className="size-3.5" />
-              Use built-in sign-in
+              Cancel
             </button>
           )}
         </div>
+        {signingIn && (
+          <p className="mt-3 text-[10px] text-faint">
+            Finish in the browser window; the session can take up to 30 seconds to save.
+          </p>
+        )}
         <div className="mt-4 flex items-center justify-center gap-1.5 text-[10px] text-faint">
           <ShieldCheck className="size-3 text-accent/70" />
           Session saved on this device only
@@ -183,7 +156,7 @@ function SignedOutLibrary({
 }
 
 export function LibraryPage(): React.JSX.Element {
-  const { status, isLoading, isPending, pendingMode, browserName, signIn, signOut } = useAuth()
+  const { status, isLoading, isPending, signIn, cancelSignIn, signOut } = useAuth()
   const [tab, setTab] = useState<LibraryTab>('songs')
   const account = status?.account
   const authenticated = Boolean(status?.authenticated)
@@ -194,10 +167,8 @@ export function LibraryPage(): React.JSX.Element {
     return (
       <SignedOutLibrary
         signingIn={isPending}
-        pendingMode={pendingMode}
-        browserName={browserName}
-        onSignIn={() => void signIn(browserName === null ? 'embedded' : 'browser')}
-        onEmbeddedSignIn={() => void signIn('embedded')}
+        onSignIn={() => void signIn()}
+        onCancel={() => void cancelSignIn()}
       />
     )
   }

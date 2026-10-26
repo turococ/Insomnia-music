@@ -1,7 +1,7 @@
-import { AlertCircle, Globe2, Loader2, X } from 'lucide-react'
+import { AlertCircle, X } from 'lucide-react'
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { AuthMode, AuthStatus } from '@shared/types'
+import type { AuthStatus } from '@shared/types'
 import { AuthContext, type AuthContextValue } from './context'
 
 function formatAuthError(error: unknown): string {
@@ -24,13 +24,6 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
     retry: 1
   })
 
-  const environmentQuery = useQuery({
-    queryKey: ['auth', 'environment'],
-    queryFn: () => window.api.auth.environment(),
-    staleTime: Infinity,
-    retry: 1
-  })
-
   const applyStatus = useCallback(
     (status: AuthStatus): void => {
       queryClient.setQueryData(['auth', 'status'], status)
@@ -43,8 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
     [queryClient]
   )
 
-  const signInMutation = useMutation<AuthStatus, Error, AuthMode>({
-    mutationFn: (mode) => window.api.auth.signIn(mode),
+  const signInMutation = useMutation({
+    mutationFn: () => window.api.auth.signIn(),
     onSuccess: (status) => {
       setError(null)
       applyStatus(status)
@@ -61,22 +54,23 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
     onError: (cause) => setError(formatAuthError(cause))
   })
 
-  const browserName =
-    environmentQuery.data === undefined ? undefined : (environmentQuery.data.browser?.name ?? null)
+  const signIn = useCallback(async (): Promise<void> => {
+    setError(null)
+    try {
+      await signInMutation.mutateAsync()
+    } catch {
+      // The mutation's onError handler exposes the failure to the user.
+    }
+  }, [signInMutation])
 
-  const signIn = useCallback(
-    async (mode: AuthMode = 'browser'): Promise<void> => {
-      const resolvedMode = mode === 'browser' && browserName === null ? 'embedded' : mode
-
-      setError(null)
-      try {
-        await signInMutation.mutateAsync(resolvedMode)
-      } catch {
-        // The mutation's onError handler exposes the failure to the user.
-      }
-    },
-    [browserName, signInMutation]
-  )
+  const cancelSignIn = useCallback(async (): Promise<void> => {
+    setError(null)
+    try {
+      await window.api.auth.cancelSignIn()
+    } catch (cause) {
+      setError(formatAuthError(cause))
+    }
+  }, [])
 
   const signOut = useCallback(async (): Promise<void> => {
     setError(null)
@@ -89,26 +83,23 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
 
   const clearError = useCallback(() => setError(null), [])
   const isPending = signInMutation.isPending || signOutMutation.isPending
-  const pendingMode = signInMutation.isPending ? (signInMutation.variables ?? 'browser') : null
 
   const value = useMemo<AuthContextValue>(
     () => ({
       status: statusQuery.data,
       isLoading: statusQuery.isLoading,
       isPending,
-      pendingMode,
-      browserName,
       error,
       signIn,
+      cancelSignIn,
       signOut,
       clearError
     }),
     [
-      browserName,
+      cancelSignIn,
       clearError,
       error,
       isPending,
-      pendingMode,
       signIn,
       signOut,
       statusQuery.data,
@@ -119,25 +110,6 @@ export function AuthProvider({ children }: { children: ReactNode }): React.JSX.E
   return (
     <AuthContext.Provider value={value}>
       {children}
-
-      {pendingMode === 'browser' && (
-        <div className="fixed bottom-28 right-6 z-40 flex max-w-sm items-start gap-3 rounded-2xl border border-accent/20 bg-surface-2/95 p-4 shadow-2xl shadow-black/40 backdrop-blur">
-          <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent">
-            <Loader2 className="size-4 animate-spin" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
-              <Globe2 className="size-3.5 text-accent" />
-              Finish signing in
-            </div>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted">
-              Complete the YouTube Music sign-in in the browser window. ToneGlass will connect
-              automatically.
-            </p>
-            <p className="mt-1.5 text-[10px] text-faint">You can close the browser to cancel.</p>
-          </div>
-        </div>
-      )}
 
       {error && (
         <div className="fixed right-6 top-20 z-50 flex max-w-sm items-start gap-3 rounded-2xl border border-red-400/20 bg-[#251215]/95 p-4 text-red-100 shadow-2xl shadow-black/40 backdrop-blur">

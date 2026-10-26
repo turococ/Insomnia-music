@@ -21,8 +21,8 @@ const api: AppApi = {
   },
   auth: {
     status: () => ipcRenderer.invoke(IPC.authStatus),
-    environment: () => ipcRenderer.invoke(IPC.authEnvironment),
-    signIn: (mode) => ipcRenderer.invoke(IPC.authSignIn, mode),
+    signIn: () => ipcRenderer.invoke(IPC.authSignIn),
+    cancelSignIn: () => ipcRenderer.invoke(IPC.authCancel),
     signOut: () => ipcRenderer.invoke(IPC.authSignOut)
   },
   playback: {

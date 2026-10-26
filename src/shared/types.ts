@@ -2,7 +2,6 @@ export type MediaKind = 'song' | 'video' | 'album' | 'playlist' | 'artist' | 'po
 export type CollectionKind = 'album' | 'playlist' | 'artist'
 export type LibraryListKind = 'playlists' | 'albums' | 'artists'
 export type SearchFilter = 'all' | 'song' | 'album' | 'artist' | 'playlist' | 'video'
-export type AuthMode = 'browser' | 'embedded'
 
 export interface Thumbnail {
   url: string
@@ -87,12 +86,6 @@ export interface AuthStatus {
   account?: AccountProfile
 }
 
-export interface AuthEnvironment {
-  browser: {
-    name: string
-  } | null
-}
-
 export type SearchTopActionKind = 'shuffle' | 'mix'
 
 export interface SearchTopAction {
@@ -150,8 +143,8 @@ export interface AppApi {
   }
   auth: {
     status: () => Promise<AuthStatus>
-    environment: () => Promise<AuthEnvironment>
-    signIn: (mode?: AuthMode) => Promise<AuthStatus>
+    signIn: () => Promise<AuthStatus>
+    cancelSignIn: () => Promise<void>
     signOut: () => Promise<AuthStatus>
   }
   playback: {

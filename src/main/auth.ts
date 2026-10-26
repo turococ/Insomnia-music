@@ -1,41 +1,27 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { tmpdir } from 'node:os'
+import { copyFileSync, existsSync, unlinkSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { BrowserWindow, session, shell, type Session } from 'electron'
-import type { AuthEnvironment, AuthMode } from '@shared/types'
+import { app, BrowserWindow, session, shell, type Session } from 'electron'
 
 const AUTH_PARTITION = 'persist:toneglass-auth'
 const AUTH_COOKIE_URL = 'https://music.youtube.com/'
 const SIGN_IN_URL =
   'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F&hl=en'
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
-const COOKIE_POLL_MS = 800
-const BROWSER_COOKIE_DB_POLL_MS = 500
-const BROWSER_LOGIN_SETTLE_MS = 500
-const BROWSER_CONTROLLER_START_TIMEOUT_MS = 20_000
-const BROWSER_HEARTBEAT_TIMEOUT_MS = 5_000
+const COOKIE_POLL_MS = 600
+const BROWSER_SETTLE_MS = 1500
+const LOGIN_INFO_GRACE_MS = 15_000
 const BROWSER_START_TIMEOUT_MS = 20_000
 const BROWSER_TARGET_TIMEOUT_MS = 15_000
 const BROWSER_CLOSE_TIMEOUT_MS = 3_000
-
-// Google blocks embedded Chromium sessions from its account flow with
-// "This browser or app may not be secure". Presenting a Firefox user agent
-// reduces that risk in the fallback window. The primary flow uses the user's
-// real browser, which Google treats as a supported client.
-function loginUserAgent(): string {
-  const platform =
-    process.platform === 'win32'
-      ? 'Windows NT 10.0; Win64; x64'
-      : process.platform === 'linux'
-        ? 'X11; Linux x86_64'
-        : 'Macintosh; Intel Mac OS X 10.15'
-  return `Mozilla/5.0 (${platform}; rv:142.0) Gecko/20100101 Firefox/142.0`
-}
+const BROWSER_PROFILE_DIR = 'auth-browser'
+// Chrome stores cookie expiry as microseconds since 1601-01-01. Session
+// cookies (including YouTube's SAPISID) are not restored when Chrome reopens
+// the profile, so mark them persistent before reading them through CDP.
+const CHROME_EPOCH_OFFSET_US = 11_644_473_600_000_000n
+const SESSION_COOKIE_LIFETIME_US = 730n * 24n * 60n * 60n * 1_000_000n
 
 const AUTH_COOKIE_NAMES = new Set([
   'SID',
@@ -48,6 +34,18 @@ const AUTH_COOKIE_NAMES = new Set([
   '__Secure-1PAPISID',
   '__Secure-3PAPISID'
 ])
+
+const REQUIRED_AUTH_COOKIES = [
+  'SID',
+  'HSID',
+  'SSID',
+  'APISID',
+  'SAPISID',
+  '__Secure-1PSID',
+  '__Secure-3PSID',
+  '__Secure-1PAPISID',
+  '__Secure-3PAPISID'
+]
 
 interface CookieLike {
   name?: string
@@ -145,6 +143,15 @@ function isImportableCookie(cookie: CdpCookie): cookie is ImportableCookie {
   return true
 }
 
+function isSecureCookie(cookie: CdpCookie): boolean {
+  return (
+    Boolean(cookie.secure) ||
+    Boolean(cookie.sameSite === 'None') ||
+    Boolean(cookie.name?.startsWith('__Secure-')) ||
+    Boolean(cookie.name?.startsWith('__Host-'))
+  )
+}
+
 function cookieUrl(domain: string, secure: boolean, path: string | undefined): string {
   const host = normalizedDomain(domain)
   const cookiePath = path?.startsWith('/') ? path : '/'
@@ -235,7 +242,29 @@ function trackBrowserError(child: ChildProcess): { error: Error | null } {
   return status
 }
 
-function profileHasAuthCookies(profileDir: string): boolean {
+function readCookieNames(cookiesPath: string): string[] {
+  let database: DatabaseSync | null = null
+  try {
+    database = new DatabaseSync(cookiesPath, { readOnly: true })
+    database.exec('PRAGMA busy_timeout = 250')
+    const rows = database
+      .prepare(
+        "SELECT name FROM cookies WHERE host_key = 'youtube.com' OR host_key LIKE '%.youtube.com'"
+      )
+      .all() as Array<{ name?: unknown }>
+
+    return rows.map((row) => row.name).filter((name): name is string => typeof name === 'string')
+  } finally {
+    try {
+      database?.close()
+    } catch {
+      // The database may already be closed.
+    }
+  }
+}
+
+function profileCookieNames(profileDir: string): Set<string> {
+  const names = new Set<string>()
   const candidates = [
     join(profileDir, 'Default', 'Cookies'),
     join(profileDir, 'Default', 'Network', 'Cookies')
@@ -244,21 +273,68 @@ function profileHasAuthCookies(profileDir: string): boolean {
   for (const cookiesPath of candidates) {
     if (!existsSync(cookiesPath)) continue
 
+    try {
+      for (const name of readCookieNames(cookiesPath)) names.add(name)
+    } catch {
+      // Windows Chrome can hold the cookie database with an exclusive lock.
+      // A byte copy lets SQLite read the last committed state while Chrome runs.
+      const copyPath = `${cookiesPath}.toneglass-read`
+      try {
+        copyFileSync(cookiesPath, copyPath)
+        for (const name of readCookieNames(copyPath)) names.add(name)
+      } catch {
+        // Chrome may be mid-write. The next poll retries.
+      } finally {
+        try {
+          unlinkSync(copyPath)
+        } catch {
+          // The copy may not have been created.
+        }
+      }
+    }
+  }
+
+  return names
+}
+
+function hasAuthCookieNames(names: Set<string>): boolean {
+  for (const name of names) {
+    if (AUTH_COOKIE_NAMES.has(name)) return true
+  }
+  return false
+}
+
+function profileHasAuthCookies(profileDir: string): boolean {
+  return hasAuthCookieNames(profileCookieNames(profileDir))
+}
+
+function preserveSessionCookies(profileDir: string): number {
+  const candidates = [
+    join(profileDir, 'Default', 'Cookies'),
+    join(profileDir, 'Default', 'Network', 'Cookies')
+  ]
+  const expiresUtc =
+    BigInt(Date.now()) * 1_000n + CHROME_EPOCH_OFFSET_US + SESSION_COOKIE_LIFETIME_US
+  let updated = 0
+
+  for (const cookiesPath of candidates) {
+    if (!existsSync(cookiesPath)) continue
+
     let database: DatabaseSync | null = null
     try {
-      database = new DatabaseSync(cookiesPath, { readOnly: true })
-      database.exec('PRAGMA busy_timeout = 1000')
-      const rows = database
+      database = new DatabaseSync(cookiesPath)
+      database.exec('PRAGMA busy_timeout = 2000')
+      const result = database
         .prepare(
-          "SELECT name FROM cookies WHERE host_key = 'youtube.com' OR host_key LIKE '%.youtube.com'"
+          "UPDATE cookies SET is_persistent = 1, has_expires = 1, expires_utc = ? WHERE is_persistent = 0 AND (host_key = 'youtube.com' OR host_key LIKE '%.youtube.com')"
         )
-        .all() as Array<{ name?: unknown }>
-
-      if (rows.some((row) => typeof row.name === 'string' && AUTH_COOKIE_NAMES.has(row.name))) {
-        return true
-      }
-    } catch {
-      // Chrome may be writing to the cookie database. The next poll retries.
+        .run(expiresUtc)
+      updated += Number(result.changes)
+    } catch (error) {
+      console.warn(
+        '[auth] could not preserve browser session cookies:',
+        error instanceof Error ? error.message : error
+      )
     } finally {
       try {
         database?.close()
@@ -268,7 +344,11 @@ function profileHasAuthCookies(profileDir: string): boolean {
     }
   }
 
-  return false
+  if (updated > 0) {
+    console.info(`[auth] preserved ${updated} browser session cookie${updated === 1 ? '' : 's'}`)
+  }
+
+  return updated
 }
 
 async function clearBrowserSingletonFiles(profileDir: string): Promise<void> {
@@ -284,6 +364,21 @@ async function clearBrowserSingletonFiles(profileDir: string): Promise<void> {
       // Chrome may have already removed the file.
     }
   }
+}
+
+// Google blocks embedded Chromium sessions from its account flow with
+// "This browser or app may not be secure". The browser flow is the reliable
+// path; this user agent is only used by the built-in fallback.
+function loginUserAgent(): string {
+  const platform =
+    process.platform === 'win32'
+      ? 'Windows NT 10.0; Win64; x64'
+      : process.platform === 'linux'
+        ? 'X11; Linux x86_64'
+        : 'Macintosh; Intel Mac OS X 10_15_7'
+  const chromeVersion = process.versions.chrome ?? '140.0.0.0'
+
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
 }
 
 function browserCandidates(): BrowserCandidate[] {
@@ -307,6 +402,8 @@ function browserCandidates(): BrowserCandidate[] {
       add('Brave Browser', join(appDir, 'Brave Browser.app', 'Contents', 'MacOS', 'Brave Browser'))
       add('Chromium', join(appDir, 'Chromium.app', 'Contents', 'MacOS', 'Chromium'))
       add('Vivaldi', join(appDir, 'Vivaldi.app', 'Contents', 'MacOS', 'Vivaldi'))
+      add('Arc', join(appDir, 'Arc.app', 'Contents', 'MacOS', 'Arc'))
+      add('Opera', join(appDir, 'Opera.app', 'Contents', 'MacOS', 'Opera'))
     }
   } else if (process.platform === 'win32') {
     const roots = [
@@ -320,14 +417,26 @@ function browserCandidates(): BrowserCandidate[] {
       add('Microsoft Edge', join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'))
       add('Brave Browser', join(root, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'))
       add('Chromium', join(root, 'Chromium', 'Application', 'chrome.exe'))
+      add('Opera', join(root, 'Programs', 'Opera', 'opera.exe'))
+      add('Opera', join(root, 'Opera', 'opera.exe'))
     }
   } else {
     add('Google Chrome', '/usr/bin/google-chrome')
     add('Google Chrome', '/usr/bin/google-chrome-stable')
+    add('Google Chrome', '/opt/google/chrome/chrome')
     add('Chromium', '/usr/bin/chromium')
     add('Chromium', '/usr/bin/chromium-browser')
+    add('Chromium', '/snap/bin/chromium')
+    add('Chromium', '/snap/bin/chromium-browser')
     add('Microsoft Edge', '/usr/bin/microsoft-edge')
+    add('Microsoft Edge', '/opt/microsoft/msedge/msedge')
     add('Brave Browser', '/usr/bin/brave-browser')
+    add('Brave Browser', '/snap/bin/brave')
+    add('Vivaldi', '/usr/bin/vivaldi')
+    add('Vivaldi', '/usr/bin/vivaldi-stable')
+    add('Opera', '/usr/bin/opera')
+    add('Opera', '/usr/bin/opera-stable')
+    add('Opera', '/opt/opera/opera')
   }
 
   return candidates
@@ -335,254 +444,6 @@ function browserCandidates(): BrowserCandidate[] {
 
 function findBrowser(): BrowserCandidate | null {
   return browserCandidates().find((candidate) => existsSync(candidate.path)) ?? null
-}
-
-interface BrowserSignInState {
-  canceled: boolean
-  lastHeartbeat: number
-}
-
-function scriptJson(value: string): string {
-  return JSON.stringify(value).replace(/</g, '\\u003c')
-}
-
-class BrowserSignInServer {
-  private readonly token = randomBytes(24).toString('hex')
-  private port = 0
-  private closed = false
-  private readonly server: Server
-  private readonly signInUrl: string
-  readonly state: BrowserSignInState = { canceled: false, lastHeartbeat: 0 }
-
-  private constructor(server: Server, signInUrl: string) {
-    this.server = server
-    this.signInUrl = signInUrl
-  }
-
-  static async start(signInUrl: string): Promise<BrowserSignInServer> {
-    const controller = new BrowserSignInServer(createServer(), signInUrl)
-    controller.server.on('request', (request, response) => {
-      controller.handleRequest(request, response)
-    })
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const onError = (error: Error): void => {
-          controller.server.off('listening', onListening)
-          reject(error)
-        }
-        const onListening = (): void => {
-          controller.server.off('error', onError)
-          resolve()
-        }
-
-        controller.server.once('error', onError)
-        controller.server.once('listening', onListening)
-        controller.server.listen(0, '127.0.0.1')
-      })
-    } catch (error) {
-      controller.server.close()
-      throw error
-    }
-
-    const address = controller.server.address()
-    if (!address || typeof address === 'string') {
-      controller.server.close()
-      throw new Error('Could not start the browser sign-in helper.')
-    }
-
-    controller.port = address.port
-    return controller
-  }
-
-  get url(): string {
-    return `http://127.0.0.1:${this.port}/auth/${this.token}`
-  }
-
-  async close(): Promise<void> {
-    if (this.closed) return
-    this.closed = true
-
-    await new Promise<void>((resolve) => {
-      this.server.close(() => resolve())
-      this.server.closeAllConnections()
-    })
-  }
-
-  private handleRequest(request: IncomingMessage, response: ServerResponse): void {
-    const base = `/auth/${this.token}`
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-    const method = request.method ?? 'GET'
-
-    if (url.pathname === '/favicon.ico') {
-      response.writeHead(204).end()
-      return
-    }
-
-    if (method === 'GET' && url.pathname === base) {
-      response.writeHead(200, {
-        'cache-control': 'no-store',
-        'content-type': 'text/html; charset=utf-8',
-        'content-security-policy':
-          "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'",
-        'referrer-policy': 'no-referrer',
-        'x-content-type-options': 'nosniff'
-      })
-      response.end(this.pageHtml())
-      return
-    }
-
-    if (method === 'POST' && url.pathname === `${base}/heartbeat`) {
-      this.state.lastHeartbeat = Date.now()
-      response.writeHead(204).end()
-      return
-    }
-
-    if (method === 'POST' && url.pathname === `${base}/cancel`) {
-      this.state.canceled = true
-      response.writeHead(204).end()
-      return
-    }
-
-    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found')
-  }
-
-  private pageHtml(): string {
-    const base = `/auth/${this.token}`
-    const heartbeatUrl = `${base}/heartbeat`
-    const cancelUrl = `${base}/cancel`
-
-    return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
-    <title>ToneGlass sign-in</title>
-    <style>
-      :root { color-scheme: dark; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: #0c0d10;
-        color: #f4f4f5;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      main { width: min(100%, 420px); padding: 42px 34px; text-align: center; }
-      .brand {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        color: #b8a6ff;
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-      }
-      .mark {
-        width: 9px;
-        height: 9px;
-        border-radius: 3px;
-        background: #9a7cff;
-        box-shadow: 0 0 20px rgba(154, 124, 255, 0.75);
-      }
-      h1 { margin: 18px 0 0; font-size: 22px; letter-spacing: -0.02em; }
-      p { margin: 12px 0 0; color: #9b9ca6; font-size: 13px; line-height: 1.6; }
-      button {
-        margin-top: 22px;
-        border: 0;
-        border-radius: 999px;
-        padding: 11px 20px;
-        background: #9a7cff;
-        color: #100b20;
-        font: inherit;
-        font-size: 12px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      button:hover { background: #ad95ff; }
-      .hint { margin-top: 22px; color: #5e606b; font-size: 11px; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <div class="brand"><span class="mark"></span>ToneGlass</div>
-      <h1>Connect YouTube Music</h1>
-      <p id="status">Opening the Google sign-in window…</p>
-      <button id="open" type="button" hidden>Open Google sign-in</button>
-      <p class="hint">Closing the Google window cancels sign-in.</p>
-    </main>
-    <script>
-      const googleUrl = ${scriptJson(this.signInUrl)}
-      const heartbeatUrl = ${scriptJson(heartbeatUrl)}
-      const cancelUrl = ${scriptJson(cancelUrl)}
-      const status = document.getElementById('status')
-      const openButton = document.getElementById('open')
-      let popup = null
-      let popupWatcher = null
-      let canceled = false
-
-      function heartbeat() {
-        fetch(heartbeatUrl, { method: 'POST', keepalive: true }).catch(() => undefined)
-      }
-
-      heartbeat()
-      window.setInterval(heartbeat, 1000)
-
-      function cancel() {
-        if (canceled) return
-        canceled = true
-        if (popupWatcher !== null) window.clearInterval(popupWatcher)
-        status.textContent = 'Sign-in canceled. You can close this window.'
-        openButton.hidden = true
-        navigator.sendBeacon(cancelUrl, 'closed')
-      }
-
-      function watchPopup() {
-        if (!popup) return
-        popupWatcher = window.setInterval(() => {
-          if (popup && popup.closed) cancel()
-        }, 500)
-      }
-
-      function launchGoogle() {
-        if (popup && !popup.closed) {
-          popup.focus()
-          return
-        }
-
-        popup = window.open(
-          googleUrl,
-          'toneglass-google-sign-in',
-          'popup=yes,width=560,height=760'
-        )
-
-        if (!popup) {
-          status.textContent = 'Allow the Google sign-in window to continue.'
-          openButton.hidden = false
-          return
-        }
-
-        status.textContent = 'Complete sign-in in the Google window.'
-        openButton.hidden = true
-        window.setTimeout(() => {
-          try { popup.focus() } catch {}
-        }, 300)
-        watchPopup()
-      }
-
-      openButton.addEventListener('click', launchGoogle)
-      window.addEventListener('load', () => window.setTimeout(launchGoogle, 250))
-      window.addEventListener('pagehide', () => {
-        if (!canceled) navigator.sendBeacon(cancelUrl, 'closed')
-      })
-    </script>
-  </body>
-</html>`
-  }
 }
 
 class CdpClient {
@@ -775,24 +636,27 @@ async function waitForPageTarget(
 
 /**
  * Keeps the YouTube Music session in a dedicated Chromium partition. The
- * browser-assisted flow uses the user's real Chrome installation with a
- * throwaway profile and copies only YouTube cookies into this partition. The
- * embedded fallback uses the same partition.
+ * primary flow signs in through the user's real browser with a persistent
+ * dedicated profile, then copies only YouTube cookies into this partition.
+ * The built-in window is only a fallback for machines without a supported
+ * Chromium browser.
  */
 class AuthService {
   private loginWindow: BrowserWindow | null = null
   private signInTask: Promise<boolean> | null = null
   private browserProcess: ChildProcess | null = null
-  private browserProfileDir: string | null = null
-  private browserSignInServer: BrowserSignInServer | null = null
-
-  environment(): AuthEnvironment {
-    const browser = findBrowser()
-    return { browser: browser ? { name: browser.name } : null }
-  }
+  private profileDirCache: string | null = null
+  private cancelRequested = false
 
   private authSession(): Session {
     return session.fromPartition(AUTH_PARTITION)
+  }
+
+  private profileDir(): string {
+    if (!this.profileDirCache) {
+      this.profileDirCache = join(app.getPath('userData'), BROWSER_PROFILE_DIR)
+    }
+    return this.profileDirCache
   }
 
   async cookieHeader(): Promise<string | undefined> {
@@ -810,25 +674,25 @@ class AuthService {
     return hasAuthCookies(cookies)
   }
 
-  async signIn(mode: AuthMode = 'browser', parent?: BrowserWindow | null): Promise<boolean> {
+  async signIn(parent?: BrowserWindow | null): Promise<boolean> {
     if (this.signInTask) {
       this.loginWindow?.focus()
       return this.signInTask
     }
 
-    const browser = mode === 'browser' ? findBrowser() : null
     const task = (async () => {
-      // Always begin with an empty auth partition. Stale YouTube cookies can
-      // leave the login page in a broken half-signed-in state, and starting
-      // clean also guarantees the cookie watcher only sees the new session.
+      this.cancelRequested = false
+      // Always begin with an empty Electron session. Stale cookies can leave
+      // the app in a broken half-signed-in state.
       await this.clearSessionData()
 
-      if (browser) return this.signInInBrowser(browser)
-
-      if (mode === 'browser') {
-        console.info('[auth] no supported browser found; opening the built-in sign-in window')
+      const browser = findBrowser()
+      if (!browser) {
+        console.info('[auth] no supported browser found; using the built-in sign-in window')
+        return this.signInEmbedded(parent)
       }
-      return this.signInEmbedded(parent)
+
+      return this.signInInBrowser(browser)
     })()
 
     this.signInTask = task
@@ -842,23 +706,65 @@ class AuthService {
   async signOut(): Promise<void> {
     await this.cancelSignIn()
     await this.clearSessionData()
+    await this.removeBrowserProfile()
+  }
+
+  async resetBrowserProfile(): Promise<void> {
+    await this.stopBrowserProcess()
+    await this.removeBrowserProfile()
+  }
+
+  private async removeBrowserProfile(): Promise<void> {
+    const profileDir = this.profileDir()
+    if (!existsSync(profileDir)) return
+
+    try {
+      await rm(profileDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 200
+      })
+      return
+    } catch (error) {
+      console.warn(
+        '[auth] could not remove the browser profile:',
+        error instanceof Error ? error.message : error
+      )
+    }
+
+    // If the profile directory cannot be removed, at least delete its cookie
+    // databases so a signed-out session cannot be imported again.
+    for (const cookiesPath of [
+      join(profileDir, 'Default', 'Network', 'Cookies'),
+      join(profileDir, 'Default', 'Cookies')
+    ]) {
+      for (const path of [
+        cookiesPath,
+        `${cookiesPath}-journal`,
+        `${cookiesPath}-wal`,
+        `${cookiesPath}-shm`
+      ]) {
+        try {
+          await rm(path, { force: true })
+        } catch {
+          // Keep trying the remaining cookie files.
+        }
+      }
+    }
+
+    if (profileHasAuthCookies(profileDir)) {
+      console.warn('[auth] the browser profile still contains sign-in cookies after reset')
+    }
   }
 
   shutdown(): void {
     if (this.loginWindow && !this.loginWindow.isDestroyed()) this.loginWindow.close()
     this.loginWindow = null
 
-    const controller = this.browserSignInServer
-    this.browserSignInServer = null
-    if (controller) void controller.close()
-
     const child = this.browserProcess
     this.browserProcess = null
     if (child?.pid && !hasExited(child)) terminateProcessTree(child)
-
-    const profile = this.browserProfileDir
-    this.browserProfileDir = null
-    if (profile) void this.removeBrowserProfile(profile)
   }
 
   private launchBrowser(
@@ -871,74 +777,191 @@ class AuthService {
       detached: false
     })
     this.browserProcess = child
-    this.browserProfileDir = profileDir
     return child
+  }
+
+  private async signInInBrowser(browser: BrowserCandidate): Promise<boolean> {
+    const profileDir = this.profileDir()
+    console.info(`[auth] using ${browser.name} (${browser.path})`)
+    console.info(`[auth] browser profile: ${profileDir}`)
+    await this.stopBrowserProcess()
+    await clearBrowserSingletonFiles(profileDir)
+
+    // Reuse the persistent browser session when possible. This is the common
+    // path after the first sign-in and avoids talking to Google altogether.
+    if (existsSync(profileDir)) {
+      let existing: CdpCookie[] | null = null
+      try {
+        console.info('[auth] checking the saved browser session')
+        existing = await this.readCookiesFromProfile(browser, profileDir)
+      } catch (error) {
+        console.warn(
+          '[auth] could not read the saved browser session:',
+          error instanceof Error ? error.message : error
+        )
+      }
+
+      if (existing && hasAuthCookies(existing)) {
+        console.info(`[auth] found ${existing.length} saved browser cookies`)
+        try {
+          await this.importYoutubeCookies(existing)
+          return true
+        } catch (error) {
+          console.warn(
+            '[auth] the saved browser session could not be imported; starting a fresh sign-in:',
+            error instanceof Error ? error.message : error
+          )
+        }
+      }
+
+      // The profile is dedicated to ToneGlass, so discarding a profile without
+      // a usable session is safe. It also guarantees the cookie watcher cannot
+      // mistake an old session for a new sign-in.
+      await this.resetBrowserProfile()
+    }
+
+    if (this.cancelRequested) return false
+
+    if (profileHasAuthCookies(profileDir)) {
+      throw new Error(
+        'Could not reset the saved browser session. Close any open ToneGlass browser windows and try again.'
+      )
+    }
+
+    console.info(`[auth] opening ${browser.name} for Google sign-in`)
+
+    let child: ChildProcess
+    try {
+      child = this.launchBrowser(browser, profileDir, [
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-sync',
+        '--disable-session-crashed-bubble',
+        '--hide-crash-restore-bubble',
+        SIGN_IN_URL
+      ])
+    } catch (error) {
+      throw new Error(
+        `Could not start ${browser.name}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        { cause: error }
+      )
+    }
+
+    const browserStatus = trackBrowserError(child)
+    let signedIn: boolean
+    try {
+      signedIn = await this.waitForBrowserSignIn(child, profileDir, browserStatus)
+    } finally {
+      // Stop the sign-in window on success, cancellation, and timeout alike.
+      await this.stopBrowserProcess()
+      await clearBrowserSingletonFiles(profileDir)
+    }
+
+    if (!signedIn || this.cancelRequested) {
+      console.info('[auth] browser sign-in was cancelled')
+      return false
+    }
+
+    console.info('[auth] browser sign-in complete; importing cookies')
+    let cookies: CdpCookie[]
+    try {
+      cookies = await this.readCookiesFromProfile(browser, profileDir)
+    } catch (error) {
+      if (this.cancelRequested) return false
+      throw error
+    }
+
+    if (!hasAuthCookies(cookies)) {
+      throw new Error('The browser session did not include YouTube Music sign-in cookies.')
+    }
+
+    try {
+      await this.importYoutubeCookies(cookies)
+      return true
+    } catch (error) {
+      // Do not leave a profile that will be re-imported forever if the cookie
+      // handoff fails. The next attempt should start with a fresh Google login.
+      console.warn(
+        '[auth] could not import the browser session; resetting the browser profile:',
+        error instanceof Error ? error.message : error
+      )
+      await this.resetBrowserProfile()
+      throw error
+    }
   }
 
   private async waitForBrowserSignIn(
     child: ChildProcess,
     profileDir: string,
-    controller: BrowserSignInServer,
     browserStatus: { error: Error | null }
   ): Promise<boolean> {
     const deadline = Date.now() + LOGIN_TIMEOUT_MS
-    const startedAt = Date.now()
+    let authCookiesFirstSeenAt: number | null = null
 
     while (Date.now() < deadline) {
+      if (this.cancelRequested) return false
+
       if (browserStatus.error) {
         throw new Error(`Could not start the browser: ${browserStatus.error.message}`)
       }
 
-      // Check the cookie database before cancellation so a sign-in that
-      // completes just as the Google window closes is still imported.
-      if (profileHasAuthCookies(profileDir)) {
-        await delay(BROWSER_LOGIN_SETTLE_MS)
-        return true
+      const names = profileCookieNames(profileDir)
+      if (hasAuthCookieNames(names)) {
+        if (authCookiesFirstSeenAt === null) {
+          authCookiesFirstSeenAt = Date.now()
+          console.info('[auth] detected YouTube cookies; waiting for the session to finish')
+        }
+
+        const loginInfoReady = names.has('LOGIN_INFO')
+        const waitedForLoginInfo = Date.now() - authCookiesFirstSeenAt
+        if (loginInfoReady || waitedForLoginInfo >= LOGIN_INFO_GRACE_MS) {
+          console.info(
+            loginInfoReady
+              ? '[auth] detected a complete YouTube session'
+              : '[auth] YouTube login cookie was not found; continuing with the available session'
+          )
+          await delay(BROWSER_SETTLE_MS)
+          return true
+        }
       }
 
-      if (controller.state.canceled) {
-        console.info('[auth] browser sign-in canceled')
+      if (hasExited(child)) {
+        // Cookies may be flushed just before the browser closes.
+        await delay(500)
+        if (profileHasAuthCookies(profileDir)) {
+          await delay(BROWSER_SETTLE_MS)
+          return true
+        }
         return false
       }
 
-      if (hasExited(child)) return false
-
-      if (controller.state.lastHeartbeat > 0) {
-        if (Date.now() - controller.state.lastHeartbeat > BROWSER_HEARTBEAT_TIMEOUT_MS) {
-          console.info('[auth] browser window closed; sign-in canceled')
-          return false
-        }
-      } else if (Date.now() - startedAt > BROWSER_CONTROLLER_START_TIMEOUT_MS) {
-        throw new Error('Could not open the browser sign-in page.')
-      }
-
-      await delay(BROWSER_COOKIE_DB_POLL_MS)
+      await delay(COOKIE_POLL_MS)
     }
 
     throw new Error('Browser sign-in timed out. Please try again.')
   }
 
-  private async readCookiesFromProfile(
+  private async withCdp<T>(
     browser: BrowserCandidate,
-    profileDir: string
-  ): Promise<CdpCookie[]> {
-    let child: ChildProcess
-    try {
-      child = this.launchBrowser(browser, profileDir, [
-        '--remote-debugging-port=0',
-        '--headless=new',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-sync',
-        'about:blank'
-      ])
-    } catch (error) {
-      throw new Error(
-        `Could not read the browser session: ${error instanceof Error ? error.message : 'unknown error'}`,
-        { cause: error }
-      )
-    }
+    profileDir: string,
+    run: (cdp: CdpClient) => Promise<T>
+  ): Promise<T> {
+    await this.stopBrowserProcess()
+    await clearBrowserSingletonFiles(profileDir)
+    // Chrome drops session-only cookies when it restarts. Promote them to
+    // persistent first so the headless read still sees SAPISID and friends.
+    preserveSessionCookies(profileDir)
 
+    const child = this.launchBrowser(browser, profileDir, [
+      '--remote-debugging-port=0',
+      '--headless=new',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-sync',
+      '--disable-session-crashed-bubble',
+      '--hide-crash-restore-bubble',
+      'about:blank'
+    ])
     const browserStatus = trackBrowserError(child)
     let cdp: CdpClient | null = null
 
@@ -946,75 +969,28 @@ class AuthService {
       const port = await waitForDevToolsPort(profileDir, child, () => browserStatus.error)
       const target = await waitForPageTarget(port, child, () => browserStatus.error)
       cdp = await CdpClient.connect(target.webSocketDebuggerUrl)
-      const result = await cdp.call<{ cookies?: CdpCookie[] }>('Network.getAllCookies')
-      return (result.cookies ?? []).filter((cookie) => isYoutubeCookie(cookie))
+      return await run(cdp)
     } finally {
       cdp?.close()
+      await this.stopBrowserProcess()
+      await clearBrowserSingletonFiles(profileDir)
     }
   }
 
-  private async signInInBrowser(browser: BrowserCandidate): Promise<boolean> {
-    // Google rejects browsers started with remote debugging enabled ("This
-    // browser or app may not be secure"). The sign-in phase therefore uses a
-    // normal browser and watches the profile's cookie database. Only after the
-    // session exists is the profile reopened headlessly with CDP to read it.
-    const profileDir = await mkdtemp(join(tmpdir(), 'toneglass-auth-'))
-    this.browserProfileDir = profileDir
-
-    let controller: BrowserSignInServer
-    try {
-      controller = await BrowserSignInServer.start(SIGN_IN_URL)
-    } catch (error) {
-      this.browserProfileDir = null
-      await this.removeBrowserProfile(profileDir)
-      throw new Error('Could not prepare browser sign-in.', { cause: error })
-    }
-
-    this.browserSignInServer = controller
-
-    try {
-      console.info(`[auth] starting ${browser.name} with a temporary profile`)
-
-      let child: ChildProcess
-      try {
-        child = this.launchBrowser(browser, profileDir, [
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-sync',
-          '--disable-popup-blocking',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--window-size=520,460',
-          `--app=${controller.url}`
-        ])
-      } catch (error) {
-        throw new Error(
-          `Could not start ${browser.name}: ${error instanceof Error ? error.message : 'unknown error'}`,
-          { cause: error }
-        )
-      }
-
-      const browserStatus = trackBrowserError(child)
-      const signedIn = await this.waitForBrowserSignIn(child, profileDir, controller, browserStatus)
-      if (!signedIn) return false
-
-      console.info('[auth] browser sign-in complete; importing cookies')
-      await this.stopBrowserProcess()
-      await clearBrowserSingletonFiles(profileDir)
-
-      const cookies = await this.readCookiesFromProfile(browser, profileDir)
-      if (!hasAuthCookies(cookies)) {
-        throw new Error('The browser session did not include YouTube Music sign-in cookies.')
-      }
-
-      await this.importYoutubeCookies(cookies)
-      return true
-    } finally {
-      await controller.close()
-      if (this.browserSignInServer === controller) this.browserSignInServer = null
-      await this.stopBrowser()
-    }
+  private async readCookiesFromProfile(
+    browser: BrowserCandidate,
+    profileDir: string
+  ): Promise<CdpCookie[]> {
+    return this.withCdp(browser, profileDir, async (cdp) => {
+      await cdp.call('Network.enable')
+      const result = await cdp.call<{ cookies?: CdpCookie[] }>('Network.getAllCookies')
+      const cookies = result.cookies ?? []
+      const youtubeCookies = cookies.filter((cookie) => isYoutubeCookie(cookie))
+      console.info(
+        `[auth] read ${cookies.length} browser cookies (${youtubeCookies.length} for YouTube)`
+      )
+      return youtubeCookies
+    })
   }
 
   private async importYoutubeCookies(cookies: CdpCookie[]): Promise<void> {
@@ -1038,24 +1014,29 @@ class AuthService {
       }
     }
 
+    let imported = 0
     for (const cookie of importable) {
       try {
+        const secure = isSecureCookie(cookie)
         const details: Electron.CookiesSetDetails = {
-          url: cookieUrl(cookie.domain, Boolean(cookie.secure), cookie.path),
+          url: cookieUrl(cookie.domain, secure, cookie.path),
           name: cookie.name,
           value: cookie.value,
           path: cookie.path?.startsWith('/') ? cookie.path : '/',
-          secure: Boolean(cookie.secure),
+          secure,
           httpOnly: Boolean(cookie.httpOnly),
           sameSite: mapSameSite(cookie.sameSite)
         }
 
-        if (cookie.domain.startsWith('.')) details.domain = cookie.domain
+        // Keep the browser's domain scope. In particular, a leading-dot
+        // youtube.com cookie must remain available to music.youtube.com.
+        details.domain = cookie.domain
         if (typeof cookie.expires === 'number' && cookie.expires > 0) {
           details.expirationDate = cookie.expires
         }
 
         await ses.cookies.set(details)
+        imported += 1
       } catch (error) {
         console.warn(
           `[auth] could not import the ${cookie.name} cookie:`,
@@ -1071,15 +1052,18 @@ class AuthService {
     }
 
     const storedNames = new Set(stored.map((cookie) => cookie.name))
-    const missing = importable
-      .filter((cookie) => AUTH_COOKIE_NAMES.has(cookie.name) && !storedNames.has(cookie.name))
-      .map((cookie) => cookie.name)
-
+    const missing = REQUIRED_AUTH_COOKIES.filter((name) => !storedNames.has(name))
     if (missing.length > 0) {
-      throw new Error(
-        `The browser session is incomplete (missing ${missing.join(', ')}). Please try again.`
-      )
+      console.warn(`[auth] imported session is missing cookies: ${missing.join(', ')}`)
     }
+
+    const present = [...storedNames].filter((name) => AUTH_COOKIE_NAMES.has(name))
+    console.info(
+      `[auth] auth cookies: ${present.join(', ')}${storedNames.has('LOGIN_INFO') ? ', LOGIN_INFO' : ''}`
+    )
+    console.info(
+      `[auth] imported ${imported} YouTube cookies; ${stored.length} are visible to music.youtube.com`
+    )
   }
 
   private async signInEmbedded(parent?: BrowserWindow | null): Promise<boolean> {
@@ -1125,7 +1109,14 @@ class AuthService {
       loginWindow.webContents.setUserAgent(loginUserAgent())
 
       loginWindow.once('ready-to-show', () => loginWindow.show())
-      loginWindow.on('closed', () => finish(false))
+      loginWindow.on('closed', () => {
+        void ses.cookies
+          .get({ url: AUTH_COOKIE_URL })
+          .then((cookies) => {
+            finish(hasAuthCookies(cookies) && cookieFingerprint(cookies) !== initialFingerprint)
+          })
+          .catch(() => finish(false))
+      })
 
       loginWindow.webContents.on(
         'did-fail-load',
@@ -1182,14 +1173,11 @@ class AuthService {
     })
   }
 
-  private async cancelSignIn(): Promise<void> {
+  async cancelSignIn(): Promise<void> {
+    this.cancelRequested = true
     if (this.loginWindow && !this.loginWindow.isDestroyed()) this.loginWindow.close()
     this.loginWindow = null
-
-    const controller = this.browserSignInServer
-    this.browserSignInServer = null
-    if (controller) await controller.close()
-    await this.stopBrowser()
+    await this.stopBrowserProcess()
   }
 
   private async clearSessionData(): Promise<void> {
@@ -1212,30 +1200,6 @@ class AuthService {
     if (!(await waitForExit(child, BROWSER_CLOSE_TIMEOUT_MS))) {
       terminateProcessTree(child, true)
       await waitForExit(child, 1000)
-    }
-  }
-
-  private async stopBrowser(): Promise<void> {
-    const profile = this.browserProfileDir
-    this.browserProfileDir = null
-
-    await this.stopBrowserProcess()
-    if (profile) await this.removeBrowserProfile(profile)
-  }
-
-  private async removeBrowserProfile(profile: string): Promise<void> {
-    try {
-      await rm(profile, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 200
-      })
-    } catch (error) {
-      console.warn(
-        '[auth] could not remove the temporary browser profile:',
-        error instanceof Error ? error.message : error
-      )
     }
   }
 }
