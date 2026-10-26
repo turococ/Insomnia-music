@@ -144,6 +144,7 @@ export interface AppApi {
     albumYears: (ids: string[]) => Promise<Record<string, number>>
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (id: string) => Promise<string | null>
+    upNext: (videoId: string, automix?: boolean) => Promise<MediaItem[]>
   }
   library: {
     list: (kind: LibraryListKind) => Promise<LibraryListData>

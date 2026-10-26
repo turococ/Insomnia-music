@@ -13,7 +13,8 @@ const api: AppApi = {
     collectionMore: (kind, id) => ipcRenderer.invoke(IPC.musicCollectionMore, kind, id),
     albumYears: (ids) => ipcRenderer.invoke(IPC.musicAlbumYears, ids),
     track: (id) => ipcRenderer.invoke(IPC.musicTrack, id),
-    lyrics: (id) => ipcRenderer.invoke(IPC.musicLyrics, id)
+    lyrics: (id) => ipcRenderer.invoke(IPC.musicLyrics, id),
+    upNext: (videoId, automix) => ipcRenderer.invoke(IPC.musicUpNext, videoId, automix)
   },
   library: {
     list: (kind) => ipcRenderer.invoke(IPC.libraryList, kind),

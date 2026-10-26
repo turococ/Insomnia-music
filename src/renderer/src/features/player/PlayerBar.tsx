@@ -27,6 +27,7 @@ export function PlayerBar(): React.JSX.Element {
   const muted = usePlayer((state) => state.muted)
   const repeat = usePlayer((state) => state.repeat)
   const shuffle = usePlayer((state) => state.shuffle)
+  const queueOpen = usePlayer((state) => state.queueOpen)
   const error = usePlayer((state) => state.error)
 
   const toggle = usePlayer((state) => state.toggle)
@@ -37,6 +38,7 @@ export function PlayerBar(): React.JSX.Element {
   const toggleMute = usePlayer((state) => state.toggleMute)
   const toggleShuffle = usePlayer((state) => state.toggleShuffle)
   const cycleRepeat = usePlayer((state) => state.cycleRepeat)
+  const toggleQueue = usePlayer((state) => state.toggleQueue)
 
   const cover = current ? pickThumbnail(current.thumbnails, 160) : undefined
   const RepeatIcon = repeat === 'one' ? Repeat1 : Repeat
@@ -65,12 +67,7 @@ export function PlayerBar(): React.JSX.Element {
               </span>
             )}
           </div>
-          <div
-            className={cn(
-              'mt-0.5 truncate text-[11px]',
-              error ? 'text-red-400' : 'text-faint'
-            )}
-          >
+          <div className={cn('mt-0.5 truncate text-[11px]', error ? 'text-red-400' : 'text-faint')}>
             {error ?? (current ? itemSubtitle(current) : 'Pick a track to start listening')}
           </div>
         </div>
@@ -171,8 +168,13 @@ export function PlayerBar(): React.JSX.Element {
       <div className="flex items-center justify-end gap-2">
         <button
           type="button"
+          onClick={toggleQueue}
           aria-label="Queue"
-          className="grid size-8 place-items-center rounded-full text-faint transition hover:bg-surface-2 hover:text-ink"
+          aria-pressed={queueOpen}
+          className={cn(
+            'grid size-8 place-items-center rounded-full transition',
+            queueOpen ? 'bg-accent/10 text-accent' : 'text-faint hover:bg-surface-2 hover:text-ink'
+          )}
         >
           <ListMusic className="size-[16px]" />
         </button>

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { MediaItem } from '@shared/types'
 import { cn } from '@renderer/lib/cn'
 import { itemSubtitle, pickThumbnail } from '@renderer/lib/media'
+import { useTrackMenu } from '@renderer/features/player/menu'
 import { usePlayer } from '@renderer/features/player/store'
 
 interface MediaCardProps {
@@ -13,6 +14,7 @@ interface MediaCardProps {
 export function MediaCard({ item, onSelect }: MediaCardProps): React.JSX.Element {
   const current = usePlayer((state) => state.current)
   const isPlaying = usePlayer((state) => state.isPlaying)
+  const openMenu = useTrackMenu((state) => state.open)
   const [imageFailed, setImageFailed] = useState(false)
   const playable = item.kind === 'song' || item.kind === 'video'
   const active = current?.id === item.id
@@ -22,6 +24,11 @@ export function MediaCard({ item, onSelect }: MediaCardProps): React.JSX.Element
     <button
       type="button"
       onClick={() => onSelect(item)}
+      onContextMenu={(event) => {
+        if (!playable) return
+        event.preventDefault()
+        openMenu(item, event.clientX, event.clientY)
+      }}
       className="group w-full text-left outline-none"
     >
       <div

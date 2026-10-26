@@ -8,6 +8,7 @@ export const IPC = {
   musicAlbumYears: 'music:album:years',
   musicTrack: 'music:track',
   musicLyrics: 'music:lyrics',
+  musicUpNext: 'music:up-next',
   libraryList: 'library:list',
   libraryMore: 'library:more',
   authStatus: 'auth:status',

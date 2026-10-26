@@ -4,6 +4,8 @@ import type { CollectionKind } from '@shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { PlayerBar } from './features/player/PlayerBar'
+import { QueuePanel } from './features/player/QueuePanel'
+import { TrackContextMenu } from './features/player/TrackContextMenu'
 import { usePlayer } from './features/player/store'
 import { HomePage } from './pages/HomePage'
 import { LibraryPage } from './pages/LibraryPage'
@@ -51,6 +53,8 @@ function App(): React.JSX.Element {
         </div>
       </div>
       <PlayerBar />
+      <QueuePanel />
+      <TrackContextMenu />
     </div>
   )
 }

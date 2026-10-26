@@ -138,6 +138,10 @@ export function registerIpc(): void {
     musicService.lyrics(requireString(id, 'track id', 200))
   )
 
+  ipcMain.handle(IPC.musicUpNext, (_event, id: unknown, automix: unknown) =>
+    musicService.upNext(requireString(id, 'track id', 200), automix === true)
+  )
+
   ipcMain.handle(IPC.libraryList, (_event, kind: unknown) =>
     musicService.libraryList(requireLibraryKind(kind))
   )

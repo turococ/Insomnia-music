@@ -543,6 +543,16 @@ class MusicService {
     return { items, title: this.text(panel.title) }
   }
 
+  /**
+   * Recommendations for a track. Used to keep playback going when the queue
+   * runs out and to start a radio station from the current song.
+   */
+  async upNext(videoId: string, automix = false): Promise<MediaItem[]> {
+    const music = await this.music()
+    const panel = await music.getUpNext(videoId, automix)
+    return this.mapPlaylistPanel(panel.contents)
+  }
+
   async searchMore(query: string, filter: SearchFilter): Promise<SearchMoreResult> {
     const trimmed = query.trim()
     if (!trimmed || filter === 'all') return { items: [], hasMore: false }
