@@ -198,6 +198,8 @@ export function QueuePanel(): React.JSX.Element {
                         <img
                           src={cover}
                           alt=""
+                          loading="lazy"
+                          decoding="async"
                           draggable={false}
                           className="size-full object-cover"
                         />

@@ -70,7 +70,14 @@ export function MediaRow({ item, index, onPlay }: MediaRowProps): React.JSX.Elem
 
       <div className="relative size-11 overflow-hidden rounded-lg border border-line/60 bg-surface-2">
         {cover ? (
-          <img src={cover} alt="" draggable={false} className="size-full object-cover" />
+          <img
+            src={cover}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+            className="size-full object-cover"
+          />
         ) : (
           <div className="grid size-full place-items-center">
             <Music2 className="size-4 text-faint" />

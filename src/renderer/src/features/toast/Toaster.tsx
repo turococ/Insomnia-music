@@ -17,7 +17,7 @@ export function Toaster(): React.JSX.Element | null {
         <div
           key={item.id}
           className={cn(
-            'pointer-events-auto flex items-start gap-2.5 rounded-2xl border bg-surface/95 px-3.5 py-3 shadow-2xl shadow-black/45 backdrop-blur-xl',
+            'toast-item pointer-events-auto flex items-start gap-2.5 rounded-2xl border bg-surface/95 px-3.5 py-3 shadow-2xl shadow-black/45 backdrop-blur-xl',
             item.tone === 'error' ? 'border-red-400/30' : 'border-line/80'
           )}
         >

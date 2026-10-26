@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Route, Routes, useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Route, Routes, useLocation, useParams } from 'react-router-dom'
 import type { CollectionKind } from '@shared/types'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
@@ -10,6 +10,7 @@ import { TrackContextMenu } from './features/player/TrackContextMenu'
 import { PlaylistPicker } from './features/library/PlaylistPicker'
 import { Toaster } from './features/toast/Toaster'
 import { usePlayer } from './features/player/store'
+import { MainScrollProvider } from './lib/mainScroll'
 import { HomePage } from './pages/HomePage'
 import { LibraryPage } from './pages/LibraryPage'
 import { ArtistSongsPage } from './pages/ArtistSongsPage'
@@ -29,6 +30,14 @@ function ArtistSongsRoute(): React.JSX.Element {
 }
 
 function App(): React.JSX.Element {
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null)
+  const { pathname } = useLocation()
+
+  useEffect(() => {
+    // Each route starts at the top, like a regular page navigation.
+    scrollElement?.scrollTo({ top: 0 })
+  }, [pathname, scrollElement])
+
   useEffect(() => {
     // Initialise the audio element and media session before the first track.
     const { volume, setVolume } = usePlayer.getState()
@@ -51,18 +60,20 @@ function App(): React.JSX.Element {
         <div className="relative flex min-w-0 flex-1 flex-col">
           <div className="app-glow pointer-events-none absolute inset-x-0 top-0 h-64" />
           <TopBar />
-          <main className="relative min-h-0 flex-1 overflow-y-auto">
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/album/:id" element={<CollectionRoute kind="album" />} />
-              <Route path="/playlist/:id" element={<CollectionRoute kind="playlist" />} />
-              <Route path="/now-playing" element={<NowPlayingPage />} />
-              <Route path="/artist/:id/songs" element={<ArtistSongsRoute />} />
-              <Route path="/artist/:id" element={<CollectionRoute kind="artist" />} />
-              <Route path="/library" element={<LibraryPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
+          <main ref={setScrollElement} className="relative min-h-0 flex-1 overflow-y-auto">
+            <MainScrollProvider value={scrollElement}>
+              <Routes>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/search" element={<SearchPage />} />
+                <Route path="/album/:id" element={<CollectionRoute kind="album" />} />
+                <Route path="/playlist/:id" element={<CollectionRoute kind="playlist" />} />
+                <Route path="/now-playing" element={<NowPlayingPage />} />
+                <Route path="/artist/:id/songs" element={<ArtistSongsRoute />} />
+                <Route path="/artist/:id" element={<CollectionRoute kind="artist" />} />
+                <Route path="/library" element={<LibraryPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Routes>
+            </MainScrollProvider>
           </main>
         </div>
       </div>
