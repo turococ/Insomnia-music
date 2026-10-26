@@ -20,7 +20,10 @@ const list = await targets()
 const target = list.find((item) => item.type === 'page' && !item.url.startsWith('devtools://'))
 
 if (!target) {
-  console.error('No page target found. Targets:', list.map((item) => ({ type: item.type, url: item.url })))
+  console.error(
+    'No page target found. Targets:',
+    list.map((item) => ({ type: item.type, url: item.url }))
+  )
   process.exit(1)
 }
 

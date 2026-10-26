@@ -75,10 +75,7 @@ class PoTokenProvider {
     const { buildURL, getHeaders } = await import('bgutils-js/utils')
 
     const webPoSignalOutput: WebPoSignalOutput = []
-    const botguardResponse = await this.botGuard.snapshot(
-      { webPoSignalOutput },
-      15_000
-    )
+    const botguardResponse = await this.botGuard.snapshot({ webPoSignalOutput }, 15_000)
 
     const integrityResponse = await fetch(buildURL('GenerateIT', true), {
       method: 'POST',
@@ -90,12 +87,7 @@ class PoTokenProvider {
       throw new Error(`Integrity token request failed: HTTP ${integrityResponse.status}`)
     }
 
-    const integrityJson = (await integrityResponse.json()) as [
-      string,
-      number,
-      number,
-      string?
-    ]
+    const integrityJson = (await integrityResponse.json()) as [string, number, number, string?]
 
     if (typeof integrityJson[0] !== 'string') {
       throw new Error('Integrity token response did not contain a token')
