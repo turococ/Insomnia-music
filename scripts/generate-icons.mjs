@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const source = join(root, 'build', 'icon-source.png')
 
+const ICON_SIZE = 1024
+const CORNER_RADIUS_RATIO = 0.225
 const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 const ICNS_SIZES = [16, 32, 64, 128, 256, 512, 1024]
 const ICNS_TYPES = {
@@ -20,6 +22,30 @@ const ICNS_TYPES = {
 
 function pngAt(image, size) {
   return image.resize({ width: size, height: size, quality: 'best' }).toPNG()
+}
+
+function roundCorners(image) {
+  const { width, height } = image.getSize()
+  const bitmap = image.toBitmap()
+  const radius = Math.min(width, height) * CORNER_RADIUS_RATIO
+  const halfWidth = width / 2
+  const halfHeight = height / 2
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dx = Math.abs(x + 0.5 - halfWidth) - (halfWidth - radius)
+      const dy = Math.abs(y + 0.5 - halfHeight) - (halfHeight - radius)
+      const distance =
+        Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - radius
+      const coverage = Math.max(0, Math.min(1, 0.5 - distance))
+      if (coverage >= 1) continue
+
+      const alphaIndex = (y * width + x) * 4 + 3
+      bitmap[alphaIndex] = Math.round(bitmap[alphaIndex] * coverage)
+    }
+  }
+
+  return nativeImage.createFromBitmap(bitmap, { width, height })
 }
 
 function buildIco(images) {
@@ -66,17 +92,21 @@ app.whenReady().then(() => {
   const image = nativeImage.createFromPath(source)
   if (image.isEmpty()) throw new Error(`Could not read ${source}`)
 
-  const ico = ICO_SIZES.map((size) => ({ size, data: pngAt(image, size) }))
-  const icns = ICNS_SIZES.map((size) => ({ size, data: pngAt(image, size) }))
+  const rounded = roundCorners(
+    image.resize({ width: ICON_SIZE, height: ICON_SIZE, quality: 'best' })
+  )
+
+  const ico = ICO_SIZES.map((size) => ({ size, data: pngAt(rounded, size) }))
+  const icns = ICNS_SIZES.map((size) => ({ size, data: pngAt(rounded, size) }))
 
   mkdirSync(join(root, 'build'), { recursive: true })
   mkdirSync(join(root, 'resources'), { recursive: true })
 
-  writeFileSync(join(root, 'build', 'icon.png'), pngAt(image, 1024))
+  writeFileSync(join(root, 'build', 'icon.png'), pngAt(rounded, ICON_SIZE))
   writeFileSync(join(root, 'build', 'icon.ico'), buildIco(ico))
   writeFileSync(join(root, 'build', 'icon.icns'), buildIcns(icns))
-  writeFileSync(join(root, 'resources', 'icon.png'), pngAt(image, 512))
-  writeFileSync(join(root, 'resources', 'tray.png'), pngAt(image, 32))
+  writeFileSync(join(root, 'resources', 'icon.png'), pngAt(rounded, 512))
+  writeFileSync(join(root, 'resources', 'tray.png'), pngAt(rounded, 32))
 
   console.log('Generated icon.png, icon.ico, icon.icns, resources/icon.png and resources/tray.png')
   app.quit()
