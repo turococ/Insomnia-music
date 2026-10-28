@@ -51,11 +51,11 @@ export function TitleBar(): React.JSX.Element {
   const routeQuery = searchParams.get('q') ?? ''
 
   return (
-    <header className="drag-region flex h-12 shrink-0 items-center gap-4 pl-8 pr-1.5">
-      <div className="no-drag w-full max-w-[520px]">
+    <header className="drag-region relative flex h-12 shrink-0 items-center">
+      <div className="no-drag absolute left-1/2 top-1/2 w-[min(520px,calc(100%_-_17rem))] -translate-x-1/2 -translate-y-1/2">
         <SearchForm key={routeQuery} initialQuery={routeQuery} />
       </div>
-      <div className="ml-auto flex items-center">
+      <div className="ml-auto flex items-center pr-1.5">
         <WindowControls />
       </div>
     </header>
