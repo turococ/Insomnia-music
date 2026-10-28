@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Innertube, Misc } from 'youtubei.js'
+import type { Innertube, Misc, YTNodes } from 'youtubei.js'
 import type {
   AccountProfile,
   AlbumRef,
@@ -28,7 +28,9 @@ import type {
   SearchTopAction,
   SearchTopActionKind,
   SearchTopActionQueue,
-  SearchTopResult
+  SearchTopResult,
+  UpNextPage,
+  UpNextQueue
 } from '@shared/types'
 import { authService } from '../auth'
 import { fetchLrclibLyrics } from '../lyrics'
@@ -55,6 +57,16 @@ type YtSearch = Awaited<ReturnType<YtMusic['search']>>
 type YtSearchContinuation = Awaited<ReturnType<YtSearch['getContinuation']>>
 type SearchContext = YtSearch | YtSearchContinuation
 type YtEndpoint = Parameters<YtMusic['getInfo']>[0]
+type YtTrackInfo = Awaited<ReturnType<YtMusic['getInfo']>>
+type YtPlaylistPanel = Awaited<ReturnType<YtTrackInfo['getUpNext']>>
+type YtPlaylistPanelContinuation = Awaited<ReturnType<YtTrackInfo['getUpNextContinuation']>>
+
+interface UpNextSession {
+  info: YtTrackInfo
+  panel: YtPlaylistPanel | YtPlaylistPanelContinuation
+  endpoint: YTNodes.NavigationEndpoint | null
+  continuation: string | null
+}
 
 interface CachedSource {
   source: PlaybackSource
@@ -237,6 +249,7 @@ class MusicService {
   private pendingLibraryMore = new Map<LibraryListKind, Promise<LibraryListData>>()
   private collectionSaveContexts = new Map<string, CollectionSaveContext>()
   private playlistPickerContext: LibraryListContext = {}
+  private upNextSessions = new Map<string, UpNextSession>()
 
   async init(): Promise<Innertube> {
     if (this.yt) return this.yt
@@ -287,6 +300,7 @@ class MusicService {
     this.pendingLibraryMore.clear()
     this.collectionSaveContexts.clear()
     this.playlistPickerContext = {}
+    this.upNextSessions.clear()
 
     await this.init()
   }
@@ -600,10 +614,104 @@ class MusicService {
    * Recommendations for a track. Used to keep playback going when the queue
    * runs out and to start a radio station from the current song.
    */
-  async upNext(videoId: string, automix = false): Promise<MediaItem[]> {
-    const music = await this.music()
-    const panel = await music.getUpNext(videoId, automix)
-    return this.mapPlaylistPanel(panel.contents)
+  async upNext(videoId: string, automix = false): Promise<UpNextQueue> {
+    const yt = await this.getYt()
+    const music = yt.music
+    const info = await music.getInfo(videoId)
+    const panel = await info.getUpNext(false)
+
+    let resolved: YtPlaylistPanel = panel
+    let endpoint: YTNodes.NavigationEndpoint | null = null
+
+    // The watch-next panel is a finite snapshot. Automix exposes the actual
+    // radio station, and keeping its endpoint is what lets us page it forever.
+    if (automix && !panel.playlist_id) {
+      const automixVideo = panel.contents.find((item) => item.type === 'AutomixPreviewVideo') as
+        { playlist_video?: { endpoint?: YTNodes.NavigationEndpoint } } | undefined
+      const automixEndpoint = automixVideo?.playlist_video?.endpoint
+      if (!automixEndpoint) throw new Error('Automix item not found')
+
+      const page = await automixEndpoint.call(yt.actions, {
+        videoId,
+        client: 'YTMUSIC',
+        parse: true
+      })
+      const automixPanel = page.contents_memo?.get('PlaylistPanel')?.[0] as
+        YtPlaylistPanel | undefined
+      if (!automixPanel) throw new Error('Could not fetch automix')
+
+      resolved = automixPanel
+      endpoint = automixEndpoint
+    }
+
+    const items = this.mapPlaylistPanel(resolved.contents)
+    const sessionId = randomUUID()
+
+    this.upNextSessions.set(sessionId, {
+      info,
+      panel: resolved,
+      endpoint,
+      continuation: resolved.continuation || null
+    })
+    this.pruneUpNextSessions()
+
+    return {
+      items,
+      sessionId,
+      title: this.text(resolved.title) || undefined,
+      hasMore: Boolean(resolved.continuation)
+    }
+  }
+
+  /** Next page of an up-next radio started by {@link upNext}. */
+  async upNextMore(sessionId: string): Promise<UpNextPage> {
+    const session = this.upNextSessions.get(sessionId)
+    if (!session) throw new Error('This radio session expired. Start the radio again.')
+    if (!session.continuation) return { items: [], hasMore: false }
+
+    try {
+      let items: MediaItem[]
+      let continuation: string | null
+
+      if (session.endpoint) {
+        // Continue the automix station through the same endpoint that produced
+        // it. TrackInfo's watch-next continuation expects a different playlist.
+        const yt = await this.getYt()
+        const page = await session.endpoint.call(yt.actions, {
+          continuation: session.continuation,
+          client: 'YTMUSIC',
+          parse: true
+        })
+        const node = page.continuation_contents
+        if (!node || node.type !== 'playlistPanelContinuation') {
+          throw new Error('No playlist continuation available.')
+        }
+
+        const next = node as YtPlaylistPanelContinuation
+        items = this.mapPlaylistPanel(next.contents)
+        continuation = next.continuation || null
+        session.panel = next
+      } else {
+        const next = await session.info.getUpNextContinuation(session.panel)
+        items = this.mapPlaylistPanel(next.contents)
+        continuation = next.continuation || null
+        session.panel = next
+      }
+
+      session.continuation = continuation
+      return { items, hasMore: Boolean(continuation) }
+    } catch (error) {
+      this.upNextSessions.delete(sessionId)
+      throw error
+    }
+  }
+
+  private pruneUpNextSessions(): void {
+    while (this.upNextSessions.size > 24) {
+      const oldest = this.upNextSessions.keys().next().value
+      if (!oldest) break
+      this.upNextSessions.delete(oldest)
+    }
   }
 
   async searchMore(query: string, filter: SearchFilter): Promise<SearchMoreResult> {

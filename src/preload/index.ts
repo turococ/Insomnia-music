@@ -15,6 +15,7 @@ const api: AppApi = {
     track: (id) => ipcRenderer.invoke(IPC.musicTrack, id),
     lyrics: (query) => ipcRenderer.invoke(IPC.musicLyrics, query),
     upNext: (videoId, automix) => ipcRenderer.invoke(IPC.musicUpNext, videoId, automix),
+    upNextMore: (sessionId) => ipcRenderer.invoke(IPC.musicUpNextMore, sessionId),
     likeStatus: (id) => ipcRenderer.invoke(IPC.musicLikeStatus, id),
     setLiked: (id, liked) => ipcRenderer.invoke(IPC.musicSetLiked, id, liked),
     setCollectionSaved: (kind, id, saved) =>

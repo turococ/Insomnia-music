@@ -149,6 +149,18 @@ export interface SearchMoreResult {
   hasMore: boolean
 }
 
+export interface UpNextQueue {
+  items: MediaItem[]
+  sessionId: string | null
+  title?: string
+  hasMore: boolean
+}
+
+export interface UpNextPage {
+  items: MediaItem[]
+  hasMore: boolean
+}
+
 export interface PlaybackSource {
   url: string
   client: string
@@ -219,7 +231,8 @@ export interface AppApi {
     albumYears: (ids: string[]) => Promise<Record<string, number>>
     track: (id: string) => Promise<MediaItem | null>
     lyrics: (query: LyricsQuery) => Promise<LyricsResult | null>
-    upNext: (videoId: string, automix?: boolean) => Promise<MediaItem[]>
+    upNext: (videoId: string, automix?: boolean) => Promise<UpNextQueue>
+    upNextMore: (sessionId: string) => Promise<UpNextPage>
     likeStatus: (id: string) => Promise<boolean>
     setLiked: (id: string, liked: boolean) => Promise<boolean>
     setCollectionSaved: (kind: CollectionKind, id: string, saved: boolean) => Promise<boolean>

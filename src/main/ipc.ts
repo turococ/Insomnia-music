@@ -169,6 +169,10 @@ export function registerIpc(): void {
     musicService.upNext(requireString(id, 'track id', 200), automix === true)
   )
 
+  ipcMain.handle(IPC.musicUpNextMore, (_event, sessionId: unknown) =>
+    musicService.upNextMore(requireString(sessionId, 'up-next session', 100))
+  )
+
   ipcMain.handle(IPC.musicLikeStatus, (_event, id: unknown) =>
     musicService.likeStatus(requireString(id, 'track id', 200))
   )

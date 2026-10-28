@@ -14,6 +14,7 @@ interface PlayerState {
   queue: MediaItem[]
   queueIndex: number
   queueSource: QueueSource | null
+  radioSession: string | null
   isPlaying: boolean
   isLoading: boolean
   isLive: boolean
@@ -27,7 +28,12 @@ interface PlayerState {
   queueOpen: boolean
   error: string | null
   playTrack: (track: MediaItem, queue?: MediaItem[], source?: QueueSource) => Promise<void>
-  playQueue: (queue: MediaItem[], index: number, source?: QueueSource | null) => Promise<void>
+  playQueue: (
+    queue: MediaItem[],
+    index: number,
+    source?: QueueSource | null,
+    radioSession?: string | null
+  ) => Promise<void>
   appendTracks: (tracks: MediaItem[], source: QueueSource) => boolean
   playNext: (track: MediaItem) => void
   addToQueue: (track: MediaItem) => void
@@ -52,7 +58,12 @@ interface PlayerState {
 
 let audio: HTMLAudioElement | null = null
 let mediaSessionReady = false
-let extendingQueue = false
+let extensionTask: Promise<void> | null = null
+let extensionRevision = -1
+let queueRevision = 0
+
+const QUEUE_AHEAD_THRESHOLD = 4
+const MAX_QUEUE_LENGTH = 500
 
 function isPlayable(item: MediaItem): boolean {
   return item.kind === 'song' || item.kind === 'video'
@@ -196,6 +207,7 @@ export const usePlayer = create<PlayerState>()(
       queue: [],
       queueIndex: -1,
       queueSource: null,
+      radioSession: null,
       isPlaying: false,
       isLoading: false,
       isLive: false,
@@ -222,7 +234,8 @@ export const usePlayer = create<PlayerState>()(
         await get().playQueue(nextQueue, index >= 0 ? index : 0, source ?? null)
       },
 
-      playQueue: async (queue, index, source = null) => {
+      playQueue: async (queue, index, source = null, radioSession = null) => {
+        queueRevision += 1
         const playable = queue.filter(isPlayable)
         const track = playable[index]
         if (!track) return
@@ -233,6 +246,7 @@ export const usePlayer = create<PlayerState>()(
           queue: playable,
           queueIndex: index,
           queueSource: source,
+          radioSession,
           isLoading: true,
           isPlaying: false,
           isLive: false,
@@ -256,6 +270,8 @@ export const usePlayer = create<PlayerState>()(
             isLoading: false
           })
         }
+
+        void ensureQueueAhead()
       },
 
       appendTracks: (tracks, source) => {
@@ -298,17 +314,19 @@ export const usePlayer = create<PlayerState>()(
       },
 
       removeFromQueue: (index) => {
-        const { queue, queueIndex, queueSource } = get()
+        const { queue, queueIndex, queueSource, radioSession } = get()
         if (index < 0 || index >= queue.length) return
 
         if (index === queueIndex) {
           const nextQueue = queue.filter((_, position) => position !== index)
           if (nextQueue.length === 0) {
+            queueRevision += 1
             getAudio().pause()
             set({
               queue: [],
               queueIndex: -1,
               queueSource: null,
+              radioSession: null,
               current: null,
               isPlaying: false,
               progress: 0,
@@ -319,7 +337,7 @@ export const usePlayer = create<PlayerState>()(
 
           const target = Math.min(index, nextQueue.length - 1)
           set({ queue: nextQueue })
-          void get().playQueue(nextQueue, target, queueSource)
+          void get().playQueue(nextQueue, target, queueSource, radioSession)
           return
         }
 
@@ -330,11 +348,13 @@ export const usePlayer = create<PlayerState>()(
       },
 
       clearQueue: () => {
+        queueRevision += 1
         const { current } = get()
         set({
           queue: current ? [current] : [],
           queueIndex: current ? 0 : -1,
-          queueSource: null
+          queueSource: null,
+          radioSession: null
         })
       },
 
@@ -360,9 +380,9 @@ export const usePlayer = create<PlayerState>()(
       },
 
       jumpTo: (index) => {
-        const { queue, queueSource } = get()
+        const { queue, queueSource, radioSession } = get()
         if (index < 0 || index >= queue.length) return
-        void get().playQueue(queue, index, queueSource)
+        void get().playQueue(queue, index, queueSource, radioSession)
       },
 
       startRadio: async (track) => {
@@ -370,13 +390,13 @@ export const usePlayer = create<PlayerState>()(
 
         set({ isLoading: true, error: null })
         try {
-          const related = await window.api.music.upNext(track.id, true)
+          const result = await window.api.music.upNext(track.id, true)
           const queue = [
             track,
-            ...related.filter((item) => isPlayable(item) && item.id !== track.id)
+            ...result.items.filter((item) => isPlayable(item) && item.id !== track.id)
           ]
           if (queue.length < 2) throw new Error('No radio tracks were found for this song.')
-          await get().playQueue(queue, 0, null)
+          await get().playQueue(queue, 0, null, result.sessionId)
         } catch (error) {
           set({ error: formatError(error), isLoading: false })
         }
@@ -389,10 +409,10 @@ export const usePlayer = create<PlayerState>()(
       setAutoplay: (enabled) => set({ autoplay: enabled }),
 
       toggle: () => {
-        const { current, queue, queueIndex, queueSource } = get()
+        const { current, queue, queueIndex, queueSource, radioSession } = get()
         if (!current) {
           if (queue.length > 0) {
-            void get().playQueue(queue, Math.max(0, queueIndex), queueSource)
+            void get().playQueue(queue, Math.max(0, queueIndex), queueSource, radioSession)
           }
           return
         }
@@ -404,7 +424,8 @@ export const usePlayer = create<PlayerState>()(
           void get().playQueue(
             queue.length > 0 ? queue : [current],
             Math.max(0, queueIndex),
-            queueSource
+            queueSource,
+            radioSession
           )
           return
         }
@@ -417,7 +438,8 @@ export const usePlayer = create<PlayerState>()(
       },
 
       next: () => {
-        const { queue, queueIndex, queueSource, repeat, shuffle, autoplay, current } = get()
+        const { queue, queueIndex, queueSource, radioSession, repeat, shuffle, autoplay, current } =
+          get()
         if (queue.length === 0) return
 
         if (repeat === 'one') {
@@ -430,42 +452,38 @@ export const usePlayer = create<PlayerState>()(
         if (shuffle && queue.length > 1) {
           let index = queueIndex
           while (index === queueIndex) index = Math.floor(Math.random() * queue.length)
-          void get().playQueue(queue, index, queueSource)
+          void get().playQueue(queue, index, queueSource, radioSession)
           return
         }
 
         if (queueIndex + 1 < queue.length) {
-          void get().playQueue(queue, queueIndex + 1, queueSource)
+          void get().playQueue(queue, queueIndex + 1, queueSource, radioSession)
           return
         }
 
         if (repeat === 'all') {
-          void get().playQueue(queue, 0, queueSource)
+          void get().playQueue(queue, 0, queueSource, radioSession)
           return
         }
 
         // Autoplay keeps the music going with similar tracks instead of
-        // stopping dead when the queue runs out.
-        if (autoplay && current && !extendingQueue) {
-          extendingQueue = true
-          void window.api.music
-            .upNext(current.id)
-            .then((related) => {
-              const queued = new Set(get().queue.map((item) => item.id))
-              const fresh = related.filter((item) => isPlayable(item) && !queued.has(item.id))
-              if (fresh.length === 0) {
-                stopPlayback()
-                return
-              }
-
-              const extended = [...get().queue, ...fresh]
-              set({ queue: extended })
-              void get().playQueue(extended, get().queueIndex + 1, get().queueSource)
-            })
-            .catch(() => stopPlayback())
-            .finally(() => {
-              extendingQueue = false
-            })
+        // stopping dead when the queue runs out. The queue is normally
+        // extended ahead of time; this is the last-resort path.
+        if (autoplay && current) {
+          void ensureQueueAhead().then(() => {
+            const state = get()
+            if (state.queueIndex + 1 < state.queue.length) {
+              void state.playQueue(
+                state.queue,
+                state.queueIndex + 1,
+                state.queueSource,
+                state.radioSession
+              )
+              return
+            }
+            set({ radioSession: null })
+            stopPlayback()
+          })
           return
         }
 
@@ -473,7 +491,7 @@ export const usePlayer = create<PlayerState>()(
       },
 
       previous: () => {
-        const { queue, queueIndex, queueSource, progress, isLive } = get()
+        const { queue, queueIndex, queueSource, radioSession, progress, isLive } = get()
         const player = getAudio()
 
         if (!isLive && (progress > 3 || queue.length === 0)) {
@@ -483,7 +501,7 @@ export const usePlayer = create<PlayerState>()(
         }
 
         if (queueIndex > 0) {
-          void get().playQueue(queue, queueIndex - 1, queueSource)
+          void get().playQueue(queue, queueIndex - 1, queueSource, radioSession)
         } else if (!isLive) {
           player.currentTime = 0
           set({ progress: 0 })
@@ -552,6 +570,99 @@ export const usePlayer = create<PlayerState>()(
     }
   )
 )
+
+/**
+ * Keeps the queue fed ahead of playback. Radio panels are paginated by
+ * YouTube Music, so the continuation token is what makes listening endless.
+ */
+async function ensureQueueAhead(): Promise<void> {
+  const revision = queueRevision
+  if (extensionTask && extensionRevision === revision) return extensionTask
+
+  const state = usePlayer.getState()
+  if (
+    !state.autoplay ||
+    state.shuffle ||
+    !state.current ||
+    state.queue.length === 0 ||
+    state.queueIndex < state.queue.length - QUEUE_AHEAD_THRESHOLD
+  ) {
+    return
+  }
+
+  extensionRevision = revision
+  const task = extendQueue().finally(() => {
+    if (extensionTask === task) {
+      extensionTask = null
+      extensionRevision = -1
+    }
+  })
+  extensionTask = task
+  return task
+}
+
+async function extendQueue(): Promise<void> {
+  const revision = queueRevision
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const state = usePlayer.getState()
+    if (!state.autoplay) return
+
+    let items: MediaItem[]
+    let hasMore: boolean
+
+    try {
+      if (state.radioSession) {
+        const page = await window.api.music.upNextMore(state.radioSession)
+        if (queueRevision !== revision) return
+        items = page.items
+        hasMore = page.hasMore
+      } else {
+        // Rotate the seed when a station is exhausted so the next station does
+        // not simply repeat the same recommendations.
+        const seed = state.queue[Math.max(0, state.queue.length - 1 - attempt)] ?? state.current
+        if (!seed) return
+        const started = await window.api.music.upNext(seed.id, true)
+        if (queueRevision !== revision) return
+        usePlayer.setState({ radioSession: started.sessionId })
+        items = started.items
+        hasMore = started.hasMore
+      }
+    } catch {
+      if (queueRevision !== revision) return
+      usePlayer.setState({ radioSession: null })
+      continue
+    }
+
+    if (!hasMore) usePlayer.setState({ radioSession: null })
+
+    const latest = usePlayer.getState()
+    const known = new Set(latest.queue.map((item) => item.id))
+    const fresh = items.filter((item) => isPlayable(item) && !known.has(item.id))
+    if (fresh.length === 0) continue
+
+    appendFreshTracks(fresh)
+    return
+  }
+}
+
+function appendFreshTracks(fresh: MediaItem[]): void {
+  const { queue, queueIndex } = usePlayer.getState()
+  const next = [...queue, ...fresh]
+  let index = queueIndex
+
+  const overflow = next.length - MAX_QUEUE_LENGTH
+  if (overflow > 0) {
+    // Never drop the track that is currently playing (or anything before it).
+    const removable = Math.min(overflow, Math.max(0, index))
+    if (removable > 0) {
+      next.splice(0, removable)
+      index -= removable
+    }
+  }
+
+  usePlayer.setState({ queue: next, queueIndex: index })
+}
 
 if (import.meta.env.DEV) {
   Object.assign(window, { __insomniaPlayer: usePlayer })
