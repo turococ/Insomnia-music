@@ -104,8 +104,23 @@ input[type='range'] {
 }
 
 .sidebar-panel {
-  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
-  will-change: transform;
+  transition:
+    width 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.3s ease;
+  will-change: width;
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.reveal-in {
+  animation: reveal-in 200ms ease 150ms both;
 }
 
 @keyframes period-in {
@@ -129,6 +144,10 @@ input[type='range'] {
   }
 
   .period-icon {
+    animation: none;
+  }
+
+  .reveal-in {
     animation: none;
   }
 }
