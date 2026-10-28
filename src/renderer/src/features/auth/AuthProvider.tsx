@@ -5,7 +5,7 @@ import type { AuthStatus, SignInResult } from '@shared/types'
 import { AuthContext, type AuthContextValue } from './context'
 
 const BLOCKED_SIGN_IN_ERROR =
-  'Google refused to sign in inside ToneGlass. Wait a moment and try again.'
+  'Google refused to sign in inside Insomnia. Wait a moment and try again.'
 
 function formatAuthError(error: unknown): string {
   if (error instanceof Error) {

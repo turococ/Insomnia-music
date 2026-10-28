@@ -6,6 +6,7 @@ import type { MediaItem } from '@shared/types'
 import { MediaShelf } from '@renderer/components/MediaShelf'
 import { usePlayer } from '@renderer/features/player/store'
 import { cn } from '@renderer/lib/cn'
+import { greetingFor, useDayPeriod } from '@renderer/lib/timeOfDay'
 import {
   collectionPath,
   isPlayable,
@@ -13,14 +14,6 @@ import {
   mergeTracks,
   pickThumbnail
 } from '@renderer/lib/media'
-
-function greeting(): string {
-  const hour = new Date().getHours()
-  if (hour < 6) return 'Good night'
-  if (hour < 12) return 'Good morning'
-  if (hour < 18) return 'Good afternoon'
-  return 'Good evening'
-}
 
 function QuickPick({
   item,
@@ -182,6 +175,7 @@ function HomeSkeleton(): React.JSX.Element {
 export function HomePage(): React.JSX.Element {
   const playTrack = usePlayer((state) => state.playTrack)
   const navigate = useNavigate()
+  const period = useDayPeriod()
   const [filter, setFilter] = useState<string | null>(null)
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
@@ -243,7 +237,7 @@ export function HomePage(): React.JSX.Element {
               Home
             </div>
             <h1 className="mt-1 text-[28px] font-semibold tracking-[-0.03em] text-ink">
-              {greeting()}
+              {greetingFor(period)}
             </h1>
           </div>
           {isFetching && (

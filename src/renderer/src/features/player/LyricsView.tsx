@@ -174,7 +174,7 @@ export function LyricsView({ track }: { track: MediaItem }): React.JSX.Element {
                   className={cn(
                     'block w-full rounded-lg px-3 py-1.5 text-center leading-7 transition-colors',
                     active
-                      ? 'text-[17px] font-semibold text-accent drop-shadow-[0_0_20px_rgba(199,255,74,0.25)]'
+                      ? 'text-[17px] font-semibold text-accent drop-shadow-[0_0_20px_color-mix(in_srgb,var(--color-accent)_30%,transparent)]'
                       : 'text-[14px] text-faint hover:text-muted'
                   )}
                 >

@@ -4,8 +4,8 @@ import { DEFAULT_SETTINGS } from '@shared/settings'
 import { accentById, accents } from './accents'
 import { SettingsContext } from './context'
 
-const ACCENT_CACHE_KEY = 'toneglass:accent'
-const CSS_CACHE_KEY = 'toneglass:custom-css'
+const ACCENT_CACHE_KEY = 'insomnia:accent'
+const CSS_CACHE_KEY = 'insomnia:custom-css'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -54,14 +54,15 @@ export function SettingsProvider({ children }: { children: React.ReactNode }): R
     const root = document.documentElement
     root.style.setProperty('--color-accent', accent.color)
     root.style.setProperty('--color-accent-soft', accent.soft)
+    root.style.setProperty('--color-accent-ink', accent.ink)
     localStorage.setItem(ACCENT_CACHE_KEY, accent.id)
   }, [settings.accent])
 
   useLayoutEffect(() => {
-    let style = document.getElementById('toneglass-user-css') as HTMLStyleElement | null
+    let style = document.getElementById('insomnia-user-css') as HTMLStyleElement | null
     if (!style) {
       style = document.createElement('style')
-      style.id = 'toneglass-user-css'
+      style.id = 'insomnia-user-css'
       document.head.appendChild(style)
     }
     style.textContent = settings.customCss

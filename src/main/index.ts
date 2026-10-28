@@ -4,15 +4,18 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { IPC } from '@shared/ipc'
 import type { PlayerCommand } from '@shared/types'
 import icon from '../../resources/icon.png?asset'
+import trayIcon from '../../resources/tray.png?asset'
 import { registerIpc } from './ipc'
+import { migrateLegacyProfile } from './migrate'
 import { applyStoredSettings, getSettings, startsHidden } from './settings'
 import { checkForUpdates, initUpdater } from './updater'
 import { musicService } from './yt/music'
 
-app.setName('ToneGlass')
+app.setName('Insomnia')
+migrateLegacyProfile()
 
-if (is.dev && process.env['TONEGLASS_DEBUG_PORT']) {
-  app.commandLine.appendSwitch('remote-debugging-port', process.env['TONEGLASS_DEBUG_PORT'])
+if (is.dev && process.env['INSOMNIA_DEBUG_PORT']) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env['INSOMNIA_DEBUG_PORT'])
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -38,19 +41,19 @@ function sendPlayerCommand(command: PlayerCommand): void {
 function createTray(): void {
   if (tray) return
 
-  const image = nativeImage.createFromPath(icon)
-  tray = new Tray(image.isEmpty() ? icon : image.resize({ width: 16, height: 16 }))
-  tray.setToolTip('ToneGlass')
+  const image = nativeImage.createFromPath(trayIcon)
+  tray = new Tray(image.isEmpty() ? icon : image)
+  tray.setToolTip('Insomnia')
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Show ToneGlass', click: showWindow },
+      { label: 'Show Insomnia', click: showWindow },
       { type: 'separator' },
       { label: 'Play / Pause', click: () => sendPlayerCommand('toggle') },
       { label: 'Next track', click: () => sendPlayerCommand('next') },
       { label: 'Previous track', click: () => sendPlayerCommand('previous') },
       { type: 'separator' },
       {
-        label: 'Quit ToneGlass',
+        label: 'Quit Insomnia',
         click: () => {
           quitting = true
           app.quit()
@@ -74,8 +77,7 @@ function createWindow(): void {
     backgroundColor: '#09090b',
     ...(process.platform === 'darwin'
       ? { titleBarStyle: 'hiddenInset' as const }
-      : { frame: false }),
-    ...(process.platform === 'linux' ? { icon } : {}),
+      : { frame: false, icon }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -132,7 +134,7 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
-    electronApp.setAppUserModelId('com.toneglass.app')
+    electronApp.setAppUserModelId('com.insomnia.music')
 
     app.on('browser-window-created', (_, window) => {
       optimizer.watchWindowShortcuts(window)

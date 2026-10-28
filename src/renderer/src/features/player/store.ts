@@ -131,7 +131,7 @@ function getAudio(): HTMLAudioElement {
   audio = new Audio()
   audio.preload = 'auto'
 
-  const storedVolume = Number(localStorage.getItem('toneglass:volume') ?? '0.8')
+  const storedVolume = Number(localStorage.getItem('insomnia:volume') ?? '0.8')
   audio.volume = Number.isFinite(storedVolume) ? Math.min(1, Math.max(0, storedVolume)) : 0.8
   usePlayer.setState({ volume: audio.volume })
 
@@ -179,7 +179,7 @@ function getAudio(): HTMLAudioElement {
 
   setupMediaSession()
   if (import.meta.env.DEV) {
-    Object.assign(window, { __toneglassAudio: audio })
+    Object.assign(window, { __insomniaAudio: audio })
   }
   return audio
 }
@@ -505,7 +505,7 @@ export const usePlayer = create<PlayerState>()(
         player.volume = next
         player.muted = next === 0
         set({ volume: next, muted: next === 0 })
-        localStorage.setItem('toneglass:volume', String(next))
+        localStorage.setItem('insomnia:volume', String(next))
       },
 
       toggleMute: () => {
@@ -524,7 +524,7 @@ export const usePlayer = create<PlayerState>()(
       clearError: () => set({ error: null })
     }),
     {
-      name: 'toneglass:player',
+      name: 'insomnia:player',
       version: 1,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
@@ -554,5 +554,5 @@ export const usePlayer = create<PlayerState>()(
 )
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { __toneglassPlayer: usePlayer })
+  Object.assign(window, { __insomniaPlayer: usePlayer })
 }

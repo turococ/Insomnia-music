@@ -178,7 +178,7 @@ export interface LyricsResult {
 }
 
 export type AudioQuality = 'best' | 'data-saver'
-export type AccentId = 'lime' | 'violet' | 'cyan' | 'coral' | 'amber'
+export type AccentId = 'violet' | 'iris' | 'orchid' | 'cyan' | 'coral' | 'amber'
 
 export interface AppSettings {
   audioQuality: AudioQuality

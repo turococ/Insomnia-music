@@ -1,7 +1,7 @@
 import type { SignInOutcome } from '@shared/types'
 import { app, BrowserWindow, session, shell, type Session } from 'electron'
 
-const AUTH_PARTITION = 'persist:toneglass-auth'
+const AUTH_PARTITION = 'persist:insomnia-auth'
 const AUTH_COOKIE_URL = 'https://music.youtube.com/'
 const SIGN_IN_URL =
   'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F&hl=en'
@@ -104,7 +104,7 @@ function loginUserAgent(): string {
 
 /**
  * Keeps the YouTube Music session in a dedicated Chromium partition. Sign-in
- * happens inside a ToneGlass window that shares this partition, so cookies
+ * happens inside an Insomnia window that shares this partition, so cookies
  * land exactly where InnerTube expects them and no browser handoff is needed.
  */
 class AuthService {
@@ -159,7 +159,7 @@ class AuthService {
   }
 
   /**
-   * Signs in inside a ToneGlass-owned window. Cookies land directly in the
+   * Signs in inside an Insomnia-owned window. Cookies land directly in the
    * auth partition, so there is no browser automation or cookie handoff. The
    * window hides itself once Google redirects to YouTube Music and reports
    * whether the resulting session was complete.

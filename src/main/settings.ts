@@ -5,10 +5,18 @@ import { DEFAULT_SETTINGS, isAccentId, isAudioQuality } from '@shared/settings'
 
 const MAX_CSS_LENGTH = 100_000
 
-const store = new Store<AppSettings>({
-  name: 'settings',
-  defaults: DEFAULT_SETTINGS
-})
+let store: Store<AppSettings> | null = null
+
+function getStore(): Store<AppSettings> {
+  if (!store) {
+    store = new Store<AppSettings>({
+      name: 'settings',
+      defaults: DEFAULT_SETTINGS
+    })
+  }
+
+  return store
+}
 
 function sanitize(stored: Partial<AppSettings>): AppSettings {
   return {
@@ -32,7 +40,7 @@ function sanitize(stored: Partial<AppSettings>): AppSettings {
 }
 
 export function getSettings(): AppSettings {
-  return sanitize(store.store)
+  return sanitize(getStore().store)
 }
 
 function applyLaunchAtStartup(enabled: boolean): void {
@@ -73,7 +81,7 @@ export function updateSettings(patch: unknown): AppSettings {
     next[key] = input[key] as boolean
   }
 
-  store.store = next
+  getStore().store = next
 
   if ('launchAtStartup' in input) applyLaunchAtStartup(next.launchAtStartup)
 
@@ -81,7 +89,7 @@ export function updateSettings(patch: unknown): AppSettings {
 }
 
 export function resetSettings(): AppSettings {
-  store.store = DEFAULT_SETTINGS
+  getStore().store = DEFAULT_SETTINGS
   applyLaunchAtStartup(DEFAULT_SETTINGS.launchAtStartup)
   return getSettings()
 }

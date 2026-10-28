@@ -1,8 +1,8 @@
-# ToneGlass
+# Insomnia
 
 An open-source, customizable desktop client for YouTube Music.
 
-ToneGlass is not affiliated with YouTube or Google.
+Insomnia is not affiliated with YouTube or Google.
 
 ## Build from source
 

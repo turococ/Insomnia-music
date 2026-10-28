@@ -1,11 +1,11 @@
 import type { AccentId, AppSettings, AudioQuality } from './types'
 
-export const ACCENT_IDS = ['lime', 'violet', 'cyan', 'coral', 'amber'] as const
+export const ACCENT_IDS = ['violet', 'iris', 'orchid', 'cyan', 'coral', 'amber'] as const
 export const AUDIO_QUALITIES = ['best', 'data-saver'] as const
 
 export const DEFAULT_SETTINGS: AppSettings = {
   audioQuality: 'best',
-  accent: 'lime',
+  accent: 'violet',
   customCss: '',
   closeToTray: false,
   launchAtStartup: false,

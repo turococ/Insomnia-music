@@ -206,7 +206,7 @@ export function SettingsPage(): React.JSX.Element {
   const saveCss = useCallback((customCss: string) => update({ customCss }), [update])
 
   const handleReset = async (): Promise<void> => {
-    if (!window.confirm('Reset all ToneGlass settings to their defaults?')) return
+    if (!window.confirm('Reset all Insomnia settings to their defaults?')) return
     await reset()
     setCssKey((key) => key + 1)
   }
@@ -277,7 +277,7 @@ export function SettingsPage(): React.JSX.Element {
                 style={{ backgroundColor: option.color }}
               >
                 {option.id === settings.accent && (
-                  <Check className="size-3 text-black" strokeWidth={3} />
+                  <Check className="size-3" style={{ color: option.ink }} strokeWidth={3} />
                 )}
               </span>
               {option.label}
@@ -367,7 +367,7 @@ export function SettingsPage(): React.JSX.Element {
 
           <SettingRow
             title="Launch at startup"
-            description="Start ToneGlass minimized in the tray when you sign in."
+            description="Start Insomnia minimized in the tray when you sign in."
           >
             <Toggle
               checked={settings.launchAtStartup}
@@ -379,7 +379,7 @@ export function SettingsPage(): React.JSX.Element {
 
         <div className="mt-4 flex items-center gap-2 rounded-2xl border border-line/60 bg-canvas/40 px-4 py-3 text-[10px] text-faint">
           <PanelBottom className="size-3.5 shrink-0 text-accent" />
-          ToneGlass stays in the system tray while it is running.
+          Insomnia stays in the system tray while it is running.
         </div>
       </section>
 

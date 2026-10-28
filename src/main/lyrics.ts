@@ -4,7 +4,7 @@ const LRCLIB_API = 'https://lrclib.net/api'
 const REQUEST_TIMEOUT_MS = 8_000
 const REQUEST_HEADERS = {
   Accept: 'application/json',
-  'User-Agent': 'ToneGlass/1.0.0 (desktop YouTube Music client)'
+  'User-Agent': 'Insomnia/2.0.0 (desktop YouTube Music client)'
 }
 
 interface LrclibRecord {

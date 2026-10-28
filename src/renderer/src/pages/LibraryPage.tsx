@@ -74,7 +74,7 @@ function SignedOutLibrary({
         </div>
         <h1 className="mt-2 text-[30px] font-semibold tracking-[-0.03em]">Your library</h1>
         <p className="mt-1 text-[12px] text-faint">
-          Connect YouTube Music to bring your saved music into ToneGlass.
+          Connect YouTube Music to bring your saved music into Insomnia.
         </p>
       </div>
 
@@ -113,7 +113,7 @@ function SignedOutLibrary({
         <Library className="mx-auto size-7 text-faint" />
         <h2 className="mt-4 text-base font-semibold">Your music, in one place</h2>
         <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-muted">
-          Sign-in happens in a secure ToneGlass window. Your password stays with Google; only the
+          Sign-in happens in a secure Insomnia window. Your password stays with Google; only the
           YouTube Music session is stored on this device.
         </p>
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
@@ -142,7 +142,7 @@ function SignedOutLibrary({
         </div>
         {signingIn && (
           <p className="mt-3 text-[10px] text-faint">
-            Finish signing in in the ToneGlass window; it closes itself once the account is
+            Finish signing in in the Insomnia window; it closes itself once the account is
             connected.
           </p>
         )}

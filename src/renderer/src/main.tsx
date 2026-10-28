@@ -1,3 +1,4 @@
+import './lib/migrateStorage'
 import './assets/main.css'
 
 import { StrictMode } from 'react'
